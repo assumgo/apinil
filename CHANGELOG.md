@@ -2,6 +2,10 @@
 
 O número publicado no site fica em `VERSION` e em `public/version.txt`. Cada versão estável recebe uma tag `vX.Y.Z` e um release no GitHub.
 
+## 0.3.0 — 2026-10-22
+
+- Cadastros abre os submenus Pessoas, Tipos de Documentos, Condições de Pagamentos, Formas de Pagamentos e Usuários.
+
 ## 0.2.0 — 2026-10-22
 
 - Ícone de cadeado no cabeçalho abre a área restrita.

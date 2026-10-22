@@ -18,8 +18,15 @@ SESSION_COOKIE = "apinil_session"
 SESSION_HOURS = 12
 PBKDF2_ROUNDS = 600_000
 
+CADASTROS = (
+    ("/restrito/cadastros/pessoas", "Pessoas", "Clientes, fornecedores e demais pessoas da fábrica."),
+    ("/restrito/cadastros/tipos-de-documentos", "Tipos de Documentos", "Tipos usados em títulos e lançamentos."),
+    ("/restrito/cadastros/condicoes-de-pagamentos", "Condições de Pagamentos", "Prazos e parcelas das negociações."),
+    ("/restrito/cadastros/formas-de-pagamentos", "Formas de Pagamentos", "Meios usados para pagar e receber."),
+    ("/restrito/cadastros/usuarios", "Usuários", "Pessoas com acesso à área restrita."),
+)
+
 MODULES = (
-    ("/restrito/cadastros", "Cadastros", "Clientes, fornecedores e produtos da fábrica."),
     ("/restrito/contas-a-pagar", "Contas a pagar", "Compromissos e pagamentos da indústria."),
     ("/restrito/contas-a-receber", "Contas a receber", "Vendas e recebimentos."),
 )
@@ -85,17 +92,35 @@ def esc(value: str) -> str:
     return html.escape(value, quote=True)
 
 
-def page(title: str, body: str, *, logged: bool = False) -> bytes:
-    nav = ""
-    if logged:
-        links = ['<a href="/restrito/">Painel</a>']
-        links.extend(f'<a href="{esc(href)}">{esc(label)}</a>' for href, label, _text in MODULES)
-        nav = (
-            '<nav class="side">'
-            + "".join(links)
-            + '<form method="post" action="/restrito/sair"><button type="submit">Sair</button></form>'
-            "</nav>"
-        )
+def nav_link(href: str, label: str, current: str, *, sub: bool = False) -> str:
+    path = href.rstrip("/") or "/"
+    classes = ["sub"] if sub else []
+    if path == "/restrito/cadastros" and current.startswith("/restrito/cadastros"):
+        classes.append("is-section")
+    class_attr = f' class="{" ".join(classes)}"' if classes else ""
+    selected = ' aria-current="page"' if current == path else ""
+    return f'<a href="{esc(href)}"{class_attr}{selected}>{esc(label)}</a>'
+
+
+def side_nav(current: str) -> str:
+    links = [nav_link("/restrito/", "Painel", current)]
+    links.append(nav_link("/restrito/cadastros", "Cadastros", current))
+    links.append(
+        '<div class="submenu">'
+        + "".join(nav_link(href, label, current, sub=True) for href, label, _text in CADASTROS)
+        + "</div>"
+    )
+    links.extend(nav_link(href, label, current) for href, label, _text in MODULES)
+    return (
+        '<nav class="side">'
+        + "".join(links)
+        + '<form method="post" action="/restrito/sair"><button type="submit">Sair</button></form>'
+        "</nav>"
+    )
+
+
+def page(title: str, body: str, *, logged: bool = False, current: str = "") -> bytes:
+    nav = side_nav(current) if logged else ""
     document = f"""<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -138,6 +163,9 @@ APP_CSS = """
   padding: 12px 14px; font: inherit; font-weight: 600; cursor: pointer;
 }
 .side a:hover, .side button:hover { border-color: var(--green); }
+.side a[aria-current="page"], .side a.is-section { background: var(--green); color: white; border-color: var(--green); }
+.submenu { display: flex; flex-direction: column; gap: 4px; margin: -2px 0 4px 14px; }
+.submenu a { font-size: 15px; font-weight: 500; padding: 8px 12px; }
 .restrito-main h1 { text-align: left; margin-top: 0; }
 .login-card, .module-card {
   background: white; border-radius: 24px; padding: 28px; box-shadow: var(--shadow);
@@ -198,27 +226,41 @@ def current_user(handler: BaseHTTPRequestHandler):
     return {"id": row[0], "username": row[1], "name": row[2], "role": row[3]}
 
 
-def dashboard(user) -> bytes:
+def cards_for(items) -> str:
     cards = []
-    for href, label, text in MODULES:
+    for href, label, text in items:
         cards.append(
             f'<a class="module-card" href="{esc(href)}"><h2>{esc(label)}</h2><p>{esc(text)}</p></a>'
         )
+    return f'<div class="module-grid">{"".join(cards)}</div>'
+
+
+def dashboard(user) -> bytes:
+    items = (("/restrito/cadastros", "Cadastros", "Pessoas, documentos, pagamentos e usuários."),) + MODULES
     body = f"""
 <h1>Painel</h1>
 <p class="prose" style="text-align:left;margin-left:0">Olá, {esc(user["name"])}. Escolha um módulo.</p>
-<div class="module-grid">{''.join(cards)}</div>
+{cards_for(items)}
 """
-    return page("Painel", body, logged=True)
+    return page("Painel", body, logged=True, current="/restrito")
 
 
-def module_page(user, title: str, text: str) -> bytes:
+def cadastros_page() -> bytes:
+    body = f"""
+<h1>Cadastros</h1>
+<p>Escolha o cadastro que deseja consultar.</p>
+{cards_for(CADASTROS)}
+"""
+    return page("Cadastros", body, logged=True, current="/restrito/cadastros")
+
+
+def module_page(title: str, text: str, current: str) -> bytes:
     body = f"""
 <h1>{esc(title)}</h1>
 <p>{esc(text)}</p>
 <p>A estrutura de acesso já está pronta. O lançamento dos registros entra na próxima etapa.</p>
 """
-    return page(title, body, logged=True)
+    return page(title, body, logged=True, current=current)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -272,13 +314,19 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self.send_html(200, dashboard(user))
             return
-        modules = {href.rstrip("/"): (label, text) for href, label, text in MODULES}
-        if path in modules:
+        if path == "/restrito/cadastros":
             if not user:
                 self.redirect("/restrito/login")
                 return
-            label, text = modules[path]
-            self.send_html(200, module_page(user, label, text))
+            self.send_html(200, cadastros_page())
+            return
+        pages = {href.rstrip("/"): (label, text) for href, label, text in CADASTROS + MODULES}
+        if path in pages:
+            if not user:
+                self.redirect("/restrito/login")
+                return
+            label, text = pages[path]
+            self.send_html(200, module_page(label, text, path))
             return
         self.send_html(404, page("Não encontrado", "<h1>Página não encontrada</h1>"))
 
