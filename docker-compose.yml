@@ -10,3 +10,11 @@ services:
       interval: 30s
       timeout: 3s
       retries: 3
+  auth:
+    build: ./auth
+    image: apinil-auth:local
+    network_mode: host
+    env_file:
+      - path: .env
+        required: false
+    restart: unless-stopped

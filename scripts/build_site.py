@@ -579,8 +579,9 @@ def render_header(path: str, logo: str) -> str:
     <a class="brand" href="/about-1/">
       <img src="{esc(logo)}" alt="Apinil cosméticos">
     </a>
-    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
     <nav id="site-nav" class="site-nav">{''.join(nav)}</nav>
+    <a class="restrito-link" href="/restrito/" aria-label="Área restrita" title="Área restrita"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="5" y="11" width="14" height="9" rx="2"></rect><path d="M8 11V8a4 4 0 0 1 8 0v3"></path></svg></a>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
   </div>
   <nav class="cat-nav" aria-label="Linhas">{''.join(cats)}</nav>
 </header>
@@ -840,9 +841,22 @@ a { color: var(--green-dark); }
   color: var(--green-dark);
   border-bottom-color: var(--green);
 }
+.restrito-link {
+  margin-left: 10px;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  display: grid;
+  place-items: center;
+  color: var(--green-dark);
+  background: var(--paper);
+  flex: 0 0 auto;
+}
+.restrito-link:hover { background: var(--green); color: white; }
 .nav-toggle {
   display: none;
-  margin-left: auto;
+  margin-left: 8px;
   background: var(--white);
   color: var(--green-dark);
   border: 1px solid var(--line);
@@ -1012,6 +1026,7 @@ button.secondary { background: var(--green-dark); }
   border-radius: 50%;
 }
 @media (max-width: 860px) {
+  .restrito-link { margin-left: auto; }
   .nav-toggle { display: inline-block; }
   .site-nav {
     display: none;

@@ -54,9 +54,22 @@ a { color: var(--green-dark); }
   color: var(--green-dark);
   border-bottom-color: var(--green);
 }
+.restrito-link {
+  margin-left: 10px;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  display: grid;
+  place-items: center;
+  color: var(--green-dark);
+  background: var(--paper);
+  flex: 0 0 auto;
+}
+.restrito-link:hover { background: var(--green); color: white; }
 .nav-toggle {
   display: none;
-  margin-left: auto;
+  margin-left: 8px;
   background: var(--white);
   color: var(--green-dark);
   border: 1px solid var(--line);
@@ -226,6 +239,7 @@ button.secondary { background: var(--green-dark); }
   border-radius: 50%;
 }
 @media (max-width: 860px) {
+  .restrito-link { margin-left: auto; }
   .nav-toggle { display: inline-block; }
   .site-nav {
     display: none;
