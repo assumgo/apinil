@@ -10,6 +10,7 @@ if ! command -v docker >/dev/null 2>&1; then
   exit 1
 fi
 
+version="$(tr -d '[:space:]' < VERSION 2>/dev/null || echo "desconhecida")"
 docker compose up -d --build
 docker compose ps
-echo "Site no ar na porta ${PORT:-8080}."
+echo "Apinil v${version} no ar na porta ${PORT:-8080}."

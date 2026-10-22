@@ -38,3 +38,11 @@ if (form) {
     window.location.href = `mailto:apinilindustria@hotmail.com?subject=${encodeURIComponent("Contato pelo site Apinil")}&body=${text}`;
   });
 }
+fetch("/version.txt")
+  .then((response) => (response.ok ? response.text() : ""))
+  .then((version) => {
+    const label = version.trim();
+    const legal = document.querySelector(".legal");
+    if (label && legal) legal.insertAdjacentText("beforeend", ` · v${label}`);
+  })
+  .catch(() => {});
