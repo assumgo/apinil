@@ -2,6 +2,11 @@
 
 O número publicado no site fica em `VERSION` e em `public/version.txt`. Cada versão estável recebe uma tag `vX.Y.Z` e um release no GitHub.
 
+## 0.4.0 — 2026-10-22
+
+- Tipos de Documentos ganha grade com incluir, editar, pesquisar e deletar.
+- A tabela começa com os 20 tipos iniciais, da NFe ao GRNE.
+
 ## 0.3.0 — 2026-10-22
 
 - Cadastros abre os submenus Pessoas, Tipos de Documentos, Condições de Pagamentos, Formas de Pagamentos e Usuários.

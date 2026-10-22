@@ -10,7 +10,7 @@ import os
 import secrets
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlencode, urlparse
 
 import psycopg
 
@@ -29,6 +29,31 @@ CADASTROS = (
 MODULES = (
     ("/restrito/contas-a-pagar", "Contas a pagar", "Compromissos e pagamentos da indústria."),
     ("/restrito/contas-a-receber", "Contas a receber", "Vendas e recebimentos."),
+)
+
+TIPOS_PATH = "/restrito/cadastros/tipos-de-documentos"
+ESFERAS = ("Nacional", "Federal", "Estadual", "Municipal", "Geral")
+TIPOS_DOCUMENTO_INICIAIS = (
+    (1, "NFe", "Nota Fiscal Eletrônica", "Nacional"),
+    (2, "NFCe", "Nota Fiscal Consumidor Eletrônica", "Nacional"),
+    (3, "NFSe", "Nota Fiscal de Serviço Eletrônica", "Nacional"),
+    (4, "CTe", "Conhecimento de Transporte Eletrônico", "Nacional"),
+    (5, "NF3e", "Nota Fiscal de Energia Elétrica Eletrônica", "Nacional"),
+    (6, "NFCom", "Nota Fiscal Fatura de Serviço de Comunicação Eletrônica", "Nacional"),
+    (7, "NFAg-e", "Nota Fiscal de Água e Saneamento Eletrônica", "Nacional"),
+    (8, "REC", "Recibo", "Geral"),
+    (9, "BOL", "Boleto", "Geral"),
+    (10, "DUP", "Duplicata", "Geral"),
+    (11, "PRO", "Promissória", "Geral"),
+    (12, "DUA", "Documento Único de Arrecadação", "Estadual"),
+    (13, "DARF", "Documento de Arrecadação das Receitas Federais", "Federal"),
+    (14, "DUAM", "Documento Único de Arrecadação Municipal", "Municipal"),
+    (15, "DARE", "Documento de Arrecadação das Receitas Estaduais", "Estadual"),
+    (16, "GPS", "Guia da Previdência Social", "Federal"),
+    (17, "DAS", "Documento de Arrecadação do Simples Nacional", "Federal"),
+    (18, "DAE", "Documento de Arrecadação Estadual", "Estadual"),
+    (19, "DAR", "Documento de Arrecadação de Receitas", "Estadual"),
+    (20, "GRNE", "Guia Nacional de Recolhimento de Tributos Estaduais", "Estadual"),
 )
 
 
@@ -85,7 +110,30 @@ def migrate_and_seed() -> None:
             print(f"Usuário master criado: {username}")
         elif row is None:
             print("Usuário master ainda não existe. Defina ADMIN_PASSWORD para criá-lo.")
+        seed_tipos_documento(conn)
         conn.commit()
+
+
+def seed_tipos_documento(conn) -> None:
+    for item_id, nome, descricao, esfera in TIPOS_DOCUMENTO_INICIAIS:
+        conn.execute(
+            """
+            INSERT INTO tipo_documento (id, nome, descricao, esfera)
+            OVERRIDING SYSTEM VALUE
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT ON CONSTRAINT tipo_documento_nome_uniq DO NOTHING
+            """,
+            (item_id, nome, descricao, esfera),
+        )
+    conn.execute(
+        """
+        SELECT setval(
+            pg_get_serial_sequence('tipo_documento', 'id'),
+            GREATEST(COALESCE((SELECT MAX(id) FROM tipo_documento), 1), 1),
+            true
+        )
+        """
+    )
 
 
 def esc(value: str) -> str:
@@ -119,8 +167,9 @@ def side_nav(current: str) -> str:
     )
 
 
-def page(title: str, body: str, *, logged: bool = False, current: str = "") -> bytes:
+def page(title: str, body: str, *, logged: bool = False, current: str = "", wide: bool = False) -> bytes:
     nav = side_nav(current) if logged else ""
+    shell_class = "restrito-shell wide" if wide else "restrito-shell"
     document = f"""<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -141,7 +190,7 @@ def page(title: str, body: str, *, logged: bool = False, current: str = "") -> b
       <a class="restrito-link" href="/restrito/" aria-label="Área restrita" title="Área restrita">{LOCK}</a>
     </div>
   </header>
-  <div class="restrito-shell">{nav}<main class="restrito-main">{body}</main></div>
+  <div class="{shell_class}">{nav}<main class="restrito-main">{body}</main></div>
 </body>
 </html>"""
     return document.encode("utf-8")
@@ -178,6 +227,42 @@ APP_CSS = """
 .module-card h2 { text-align: left; margin: 0 0 8px; font-size: 32px; }
 .module-card p { margin: 0; color: var(--muted); }
 .error { color: #8d2b2b; font-weight: 600; }
+.restrito-shell.wide { max-width: 1240px; }
+.crud-toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 0 0 16px; }
+.search-form { display: flex; gap: 8px; flex: 1 1 280px; align-items: center; margin: 0; }
+.search-form input { flex: 1; min-width: 180px; }
+.crud-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+a.btn, button.ghost {
+  background: white; color: var(--green-dark); border: 1px solid var(--line);
+}
+a.btn {
+  border-radius: 999px; padding: 12px 18px; font-weight: 600;
+  text-decoration: none; display: inline-block;
+}
+button.danger { background: #8d2b2b; }
+.flash { background: #e7f5ec; color: var(--green-dark); border-radius: 14px; padding: 12px 14px; margin: 0 0 14px; }
+.flash.error { background: #fdecec; color: #8d2b2b; }
+.editor, .grid-card {
+  background: white; border-radius: 24px; padding: 22px; box-shadow: var(--shadow); margin-bottom: 16px;
+}
+.editor h2 { text-align: left; margin: 0 0 12px; font-size: 32px; }
+.record-form { display: grid; gap: 12px; }
+.record-form select {
+  font: inherit; border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; background: #fff;
+}
+.grid-wrap { overflow-x: auto; }
+table.grid { width: 100%; border-collapse: collapse; font-size: 15px; }
+table.grid th {
+  font-size: 12px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); font-weight: 600;
+}
+table.grid td, table.grid th { padding: 10px 12px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+table.grid tbody tr { cursor: pointer; }
+table.grid tbody tr:hover { background: #f4faf6; }
+table.grid tbody tr:has(input:checked) { background: #e7f5ec; }
+.col-id { width: 72px; }
+.col-nome { width: 110px; white-space: nowrap; }
+.col-esfera { width: 130px; }
+.grid-count { color: var(--muted); margin: 0 0 12px; }
 @media (max-width: 800px) {
   .restrito-shell { grid-template-columns: 1fr; }
 }
@@ -254,6 +339,182 @@ def cadastros_page() -> bytes:
     return page("Cadastros", body, logged=True, current="/restrito/cadastros")
 
 
+def tipos_url(**params: str) -> str:
+    clean = {key: value for key, value in params.items() if value}
+    if not clean:
+        return TIPOS_PATH
+    return TIPOS_PATH + "?" + urlencode(clean)
+
+
+def like_pattern(value: str) -> str:
+    escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
+def parse_record_id(value: str) -> int | None:
+    if value.isdigit() and len(value) <= 18:
+        return int(value)
+    return None
+
+
+def list_tipos(conn, q: str):
+    if not q:
+        return conn.execute(
+            "SELECT id, nome, descricao, esfera FROM tipo_documento ORDER BY id"
+        ).fetchall()
+    pattern = like_pattern(q)
+    return conn.execute(
+        """
+        SELECT id, nome, descricao, esfera
+        FROM tipo_documento
+        WHERE nome ILIKE %s ESCAPE '\\'
+           OR descricao ILIKE %s ESCAPE '\\'
+           OR esfera ILIKE %s ESCAPE '\\'
+        ORDER BY id
+        """,
+        (pattern, pattern, pattern),
+    ).fetchall()
+
+
+def get_tipo(conn, item_id: int):
+    return conn.execute(
+        "SELECT id, nome, descricao, esfera FROM tipo_documento WHERE id = %s",
+        (item_id,),
+    ).fetchone()
+
+
+def validate_tipo(nome: str, descricao: str, esfera: str) -> dict[str, str]:
+    errors = {}
+    if not nome:
+        errors["nome"] = "Informe o nome."
+    elif len(nome) > 30:
+        errors["nome"] = "O nome pode ter no máximo 30 caracteres."
+    if not descricao:
+        errors["descricao"] = "Informe a descrição."
+    elif len(descricao) > 180:
+        errors["descricao"] = "A descrição pode ter no máximo 180 caracteres."
+    if esfera not in ESFERAS:
+        errors["esfera"] = "Escolha a esfera."
+    return errors
+
+
+def tipos_page(*, rows, q: str, aviso: str, erro: str, editor: dict | None) -> bytes:
+    flashes = ""
+    if aviso:
+        flashes += f'<p class="flash">{esc(aviso)}</p>'
+    if erro:
+        flashes += f'<p class="flash error">{esc(erro)}</p>'
+    editor_html = ""
+    if editor:
+        options = ['<option value="">Selecione</option>']
+        for esfera in ESFERAS:
+            selected = " selected" if editor["esfera"] == esfera else ""
+            options.append(f'<option value="{esc(esfera)}"{selected}>{esc(esfera)}</option>')
+        field_errors = editor.get("errors") or {}
+        def field_error(key: str) -> str:
+            message = field_errors.get(key)
+            return f'<span class="error">{esc(message)}</span>' if message else ""
+        editor_html = f"""
+<section class="editor">
+  <h2>{esc(editor["titulo"])}</h2>
+  <form class="record-form" method="post" action="{esc(TIPOS_PATH)}">
+    <input type="hidden" name="acao" value="salvar">
+    <input type="hidden" name="id" value="{esc(editor["id"])}">
+    <input type="hidden" name="q" value="{esc(q)}">
+    <label>Nome<input name="nome" maxlength="30" required value="{esc(editor["nome"])}" autofocus>{field_error("nome")}</label>
+    <label>Descrição<input name="descricao" maxlength="180" required value="{esc(editor["descricao"])}">{field_error("descricao")}</label>
+    <label>Esfera<select name="esfera" required>{"".join(options)}</select>{field_error("esfera")}</label>
+    <div class="form-actions">
+      <button type="submit">Salvar</button>
+      <a class="btn" href="{esc(tipos_url(q=q))}">Cancelar</a>
+    </div>
+  </form>
+</section>
+"""
+    body_rows = []
+    for item_id, nome, descricao, esfera in rows:
+        body_rows.append(
+            "<tr>"
+            f'<td class="col-id"><input type="radio" name="id" value="{item_id}" aria-label="Selecionar {esc(nome)}"></td>'
+            f"<td>{item_id}</td>"
+            f"<td class=\"col-nome\">{esc(nome)}</td>"
+            f"<td>{esc(descricao)}</td>"
+            f"<td class=\"col-esfera\">{esc(esfera)}</td>"
+            "</tr>"
+        )
+    if body_rows:
+        grid_body = "".join(body_rows)
+    else:
+        grid_body = '<tr><td colspan="5">Nenhum tipo de documento encontrado.</td></tr>'
+    quantidade = len(rows)
+    legenda = "1 registro" if quantidade == 1 else f"{quantidade} registros"
+    body = f"""
+<h1>Tipos de Documentos</h1>
+{flashes}
+<div class="crud-toolbar">
+  <form class="search-form" method="get" action="{esc(TIPOS_PATH)}">
+    <input name="q" value="{esc(q)}" placeholder="Nome, descrição ou esfera" aria-label="Pesquisar tipos de documento">
+    <button type="submit">Pesquisar</button>
+  </form>
+  <div class="crud-actions">
+    <a class="btn" href="{esc(tipos_url(acao="incluir", q=q))}">Incluir</a>
+    <button type="submit" class="ghost" form="grade-tipos" name="acao" value="editar" id="editar-tipo">Editar</button>
+    <button type="submit" class="danger" form="grade-tipos" name="acao" value="excluir" id="deletar-tipo">Deletar</button>
+  </div>
+</div>
+{editor_html}
+<section class="grid-card">
+  <p class="grid-count">{esc(legenda)}</p>
+  <form id="grade-tipos" method="post" action="{esc(TIPOS_PATH)}">
+    <input type="hidden" name="q" value="{esc(q)}">
+    <div class="grid-wrap">
+      <table class="grid">
+        <thead>
+          <tr><th></th><th>ID</th><th>Nome</th><th>Descrição</th><th>Esfera</th></tr>
+        </thead>
+        <tbody>{grid_body}</tbody>
+      </table>
+    </div>
+  </form>
+</section>
+<script>
+const grade = document.getElementById("grade-tipos");
+function tipoSelecionado() {{
+  const marcado = grade.querySelector('input[name="id"]:checked');
+  return marcado ? marcado.value : "";
+}}
+document.getElementById("editar-tipo").addEventListener("click", (event) => {{
+  if (!tipoSelecionado()) {{
+    event.preventDefault();
+    alert("Selecione um registro na grade.");
+  }}
+}});
+document.getElementById("deletar-tipo").addEventListener("click", (event) => {{
+  if (!tipoSelecionado()) {{
+    event.preventDefault();
+    alert("Selecione um registro na grade.");
+    return;
+  }}
+  if (!confirm("Deletar o tipo de documento selecionado?")) event.preventDefault();
+}});
+grade.querySelectorAll("tbody tr").forEach((row) => {{
+  row.addEventListener("click", (event) => {{
+    if (event.target.closest("input,a,button")) return;
+    const radio = row.querySelector('input[type="radio"]');
+    if (radio) radio.checked = true;
+  }});
+  row.addEventListener("dblclick", () => {{
+    const radio = row.querySelector('input[type="radio"]');
+    if (!radio) return;
+    radio.checked = true;
+    document.getElementById("editar-tipo").click();
+  }});
+}});
+</script>
+"""
+    return page("Tipos de Documentos", body, logged=True, current=TIPOS_PATH, wide=True)
+
+
 def module_page(title: str, text: str, current: str) -> bytes:
     body = f"""
 <h1>{esc(title)}</h1>
@@ -320,6 +581,12 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self.send_html(200, cadastros_page())
             return
+        if path == TIPOS_PATH:
+            if not user:
+                self.redirect("/restrito/login")
+                return
+            self.handle_tipos_get()
+            return
         pages = {href.rstrip("/"): (label, text) for href, label, text in CADASTROS + MODULES}
         if path in pages:
             if not user:
@@ -341,7 +608,141 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/restrito/sair":
             self.handle_logout()
             return
+        if path == TIPOS_PATH:
+            if not current_user(self):
+                self.redirect("/restrito/login")
+                return
+            self.handle_tipos_post(form)
+            return
         self.send_html(404, page("Não encontrado", "<h1>Página não encontrada</h1>"))
+
+    def query(self) -> dict[str, str]:
+        parsed = urlparse(self.path)
+        return {key: values[0] for key, values in parse_qs(parsed.query).items()}
+
+    def handle_tipos_get(self) -> None:
+        params = self.query()
+        q = params.get("q", "").strip()[:80]
+        acao = params.get("acao", "")
+        aviso = {
+            "incluido": "Tipo de documento incluído.",
+            "alterado": "Tipo de documento alterado.",
+            "excluido": "Tipo de documento deletado.",
+        }.get(params.get("aviso", ""), "")
+        erro = {
+            "selecione": "Selecione um registro na grade.",
+            "ausente": "Registro não encontrado.",
+        }.get(params.get("erro", ""), "")
+        editor = None
+        with connect() as conn:
+            if acao == "incluir":
+                editor = {
+                    "titulo": "Incluir tipo de documento",
+                    "id": "",
+                    "nome": "",
+                    "descricao": "",
+                    "esfera": "",
+                    "errors": {},
+                }
+            elif acao == "editar":
+                item_id = parse_record_id(params.get("id", ""))
+                row = get_tipo(conn, item_id) if item_id else None
+                if row is None:
+                    erro = "Selecione um registro na grade."
+                else:
+                    editor = {
+                        "titulo": "Editar tipo de documento",
+                        "id": str(row[0]),
+                        "nome": row[1],
+                        "descricao": row[2],
+                        "esfera": row[3],
+                        "errors": {},
+                    }
+            rows = list_tipos(conn, q)
+        self.send_html(200, tipos_page(rows=rows, q=q, aviso=aviso, erro=erro, editor=editor))
+
+    def handle_tipos_post(self, form: dict[str, str]) -> None:
+        acao = form.get("acao", "")
+        q = form.get("q", "").strip()[:80]
+        if acao == "salvar":
+            self.save_tipo(form, q)
+            return
+        if acao == "editar":
+            item_id = parse_record_id(form.get("id", ""))
+            if item_id is None:
+                self.redirect(tipos_url(q=q, erro="selecione"))
+                return
+            self.redirect(tipos_url(acao="editar", id=str(item_id), q=q))
+            return
+        if acao == "excluir":
+            item_id = parse_record_id(form.get("id", ""))
+            if item_id is None:
+                self.redirect(tipos_url(q=q, erro="selecione"))
+                return
+            with connect() as conn:
+                deleted = conn.execute(
+                    "DELETE FROM tipo_documento WHERE id = %s", (item_id,)
+                ).rowcount
+                conn.commit()
+            if not deleted:
+                self.redirect(tipos_url(q=q, erro="ausente"))
+                return
+            self.redirect(tipos_url(q=q, aviso="excluido"))
+            return
+        self.redirect(TIPOS_PATH)
+
+    def save_tipo(self, form: dict[str, str], q: str) -> None:
+        item_id = parse_record_id(form.get("id", ""))
+        nome = " ".join(form.get("nome", "").split())
+        descricao = " ".join(form.get("descricao", "").split())
+        esfera = form.get("esfera", "").strip()
+        errors = validate_tipo(nome, descricao, esfera)
+        editor = {
+            "titulo": "Editar tipo de documento" if item_id else "Incluir tipo de documento",
+            "id": str(item_id or ""),
+            "nome": nome,
+            "descricao": descricao,
+            "esfera": esfera,
+            "errors": errors,
+        }
+        if errors:
+            with connect() as conn:
+                rows = list_tipos(conn, q)
+            self.send_html(400, tipos_page(rows=rows, q=q, aviso="", erro="", editor=editor))
+            return
+        try:
+            with connect() as conn:
+                if item_id:
+                    found = get_tipo(conn, item_id)
+                    if found is None:
+                        self.redirect(tipos_url(q=q, erro="ausente"))
+                        return
+                    conn.execute(
+                        """
+                        UPDATE tipo_documento
+                        SET nome = %s, descricao = %s, esfera = %s, updated_at = now()
+                        WHERE id = %s
+                        """,
+                        (nome, descricao, esfera, item_id),
+                    )
+                    aviso = "alterado"
+                else:
+                    conn.execute(
+                        """
+                        INSERT INTO tipo_documento (nome, descricao, esfera)
+                        VALUES (%s, %s, %s)
+                        """,
+                        (nome, descricao, esfera),
+                    )
+                    aviso = "incluido"
+                conn.commit()
+        except psycopg.errors.UniqueViolation:
+            editor["errors"] = {"nome": "Já existe um tipo de documento com este nome."}
+            with connect() as conn:
+                rows = list_tipos(conn, q)
+            self.send_html(400, tipos_page(rows=rows, q=q, aviso="", erro="", editor=editor))
+            return
+        self.redirect(tipos_url(q=q, aviso=aviso))
 
     def handle_login(self, username: str, password: str) -> None:
         username = username.strip()
