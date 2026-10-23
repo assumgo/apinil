@@ -2,6 +2,10 @@
 
 O número publicado no site fica em `VERSION` e em `public/version.txt`. Cada versão estável recebe uma tag `vX.Y.Z` e um release no GitHub.
 
+## 0.6.1 — 2026-10-23
+
+- O menu principal da área restrita ganha o item Titulos.
+
 ## 0.6.0 — 2026-10-23
 
 - Condições de Pagamentos ganha grade com incluir, editar, pesquisar e deletar.

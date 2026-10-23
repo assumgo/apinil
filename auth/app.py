@@ -29,6 +29,7 @@ CADASTROS = (
 MODULES = (
     ("/restrito/contas-a-pagar", "Contas a pagar", "Compromissos e pagamentos da indústria."),
     ("/restrito/contas-a-receber", "Contas a receber", "Vendas e recebimentos."),
+    ("/restrito/titulos", "Titulos", "Títulos da fábrica, a pagar e a receber."),
 )
 
 TIPOS_PATH = "/restrito/cadastros/tipos-de-documentos"
