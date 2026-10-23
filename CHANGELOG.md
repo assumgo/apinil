@@ -2,6 +2,10 @@
 
 O número publicado no site fica em `VERSION` e em `public/version.txt`. Cada versão estável recebe uma tag `vX.Y.Z` e um release no GitHub.
 
+## 0.5.1 — 2026-10-23
+
+- Formas de Pagamentos passa a ter nome e descrição. Os oito registros iniciais ficam DIH/Dinheiro, PIX/Pix, BOL/Boleto, CRE/Cartão Crédito, DEB/Cartão Débito, CHQ/Cheque, DUP/Duplicata e PRO/Promissória.
+
 ## 0.5.0 — 2026-10-23
 
 - Formas de Pagamentos ganha grade com incluir, editar, pesquisar e deletar.

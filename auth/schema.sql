@@ -37,11 +37,17 @@ CREATE UNIQUE INDEX IF NOT EXISTS tipo_documento_nome_lower_idx
 
 CREATE TABLE IF NOT EXISTS forma_pagamento (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    nome text NOT NULL,
     descricao text NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT forma_pagamento_nome_uniq UNIQUE (nome),
     CONSTRAINT forma_pagamento_descricao_uniq UNIQUE (descricao)
 );
 
+ALTER TABLE forma_pagamento ADD COLUMN IF NOT EXISTS nome text;
+
+CREATE UNIQUE INDEX IF NOT EXISTS forma_pagamento_nome_lower_idx
+    ON forma_pagamento (lower(nome));
 CREATE UNIQUE INDEX IF NOT EXISTS forma_pagamento_descricao_lower_idx
     ON forma_pagamento (lower(descricao));

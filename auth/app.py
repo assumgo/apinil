@@ -58,14 +58,14 @@ TIPOS_DOCUMENTO_INICIAIS = (
 
 FORMAS_PATH = "/restrito/cadastros/formas-de-pagamentos"
 FORMAS_PAGAMENTO_INICIAIS = (
-    (1, "DIH"),
-    (2, "PIX"),
-    (3, "BOL"),
-    (4, "CRE"),
-    (5, "DEB"),
-    (6, "CHQ"),
-    (7, "DUP"),
-    (8, "PRO"),
+    (1, "DIH", "Dinheiro"),
+    (2, "PIX", "Pix"),
+    (3, "BOL", "Boleto"),
+    (4, "CRE", "Cartão Crédito"),
+    (5, "DEB", "Cartão Débito"),
+    (6, "CHQ", "Cheque"),
+    (7, "DUP", "Duplicata"),
+    (8, "PRO", "Promissória"),
 )
 
 
@@ -150,16 +150,41 @@ def seed_tipos_documento(conn) -> None:
 
 
 def seed_formas_pagamento(conn) -> None:
-    for item_id, descricao in FORMAS_PAGAMENTO_INICIAIS:
+    conn.execute("ALTER TABLE forma_pagamento ADD COLUMN IF NOT EXISTS nome text")
+    for _item_id, nome, descricao in FORMAS_PAGAMENTO_INICIAIS:
         conn.execute(
             """
-            INSERT INTO forma_pagamento (id, descricao)
-            OVERRIDING SYSTEM VALUE
-            VALUES (%s, %s)
-            ON CONFLICT ON CONSTRAINT forma_pagamento_descricao_uniq DO NOTHING
+            UPDATE forma_pagamento
+            SET nome = %s, descricao = %s, updated_at = now()
+            WHERE (nome IS NULL OR btrim(nome) = '')
+              AND descricao = %s
             """,
-            (item_id, descricao),
+            (nome, descricao, nome),
         )
+    conn.execute(
+        """
+        UPDATE forma_pagamento
+        SET nome = descricao
+        WHERE nome IS NULL OR btrim(nome) = ''
+        """
+    )
+    for item_id, nome, descricao in FORMAS_PAGAMENTO_INICIAIS:
+        conn.execute(
+            """
+            INSERT INTO forma_pagamento (id, nome, descricao)
+            OVERRIDING SYSTEM VALUE
+            VALUES (%s, %s, %s)
+            ON CONFLICT (id) DO NOTHING
+            """,
+            (item_id, nome, descricao),
+        )
+    conn.execute("ALTER TABLE forma_pagamento ALTER COLUMN nome SET NOT NULL")
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS forma_pagamento_nome_lower_idx
+        ON forma_pagamento (lower(nome))
+        """
+    )
     conn.execute(
         """
         SELECT setval(
@@ -560,33 +585,39 @@ def formas_url(**params: str) -> str:
 def list_formas(conn, q: str):
     if not q:
         return conn.execute(
-            "SELECT id, descricao FROM forma_pagamento ORDER BY id"
+            "SELECT id, nome, descricao FROM forma_pagamento ORDER BY id"
         ).fetchall()
     pattern = like_pattern(q)
     return conn.execute(
         """
-        SELECT id, descricao
+        SELECT id, nome, descricao
         FROM forma_pagamento
-        WHERE descricao ILIKE %s ESCAPE '\\'
+        WHERE nome ILIKE %s ESCAPE '\\'
+           OR descricao ILIKE %s ESCAPE '\\'
         ORDER BY id
         """,
-        (pattern,),
+        (pattern, pattern),
     ).fetchall()
 
 
 def get_forma(conn, item_id: int):
     return conn.execute(
-        "SELECT id, descricao FROM forma_pagamento WHERE id = %s",
+        "SELECT id, nome, descricao FROM forma_pagamento WHERE id = %s",
         (item_id,),
     ).fetchone()
 
 
-def validate_forma(descricao: str) -> dict[str, str]:
+def validate_forma(nome: str, descricao: str) -> dict[str, str]:
+    errors = {}
+    if not nome:
+        errors["nome"] = "Informe o nome."
+    elif len(nome) > 30:
+        errors["nome"] = "O nome pode ter no máximo 30 caracteres."
     if not descricao:
-        return {"descricao": "Informe a descrição."}
-    if len(descricao) > 40:
-        return {"descricao": "A descrição pode ter no máximo 40 caracteres."}
-    return {}
+        errors["descricao"] = "Informe a descrição."
+    elif len(descricao) > 80:
+        errors["descricao"] = "A descrição pode ter no máximo 80 caracteres."
+    return errors
 
 
 def formas_page(*, rows, q: str, aviso: str, erro: str, editor: dict | None) -> bytes:
@@ -597,8 +628,10 @@ def formas_page(*, rows, q: str, aviso: str, erro: str, editor: dict | None) -> 
         flashes += f'<p class="flash error">{esc(erro)}</p>'
     editor_html = ""
     if editor:
-        message = (editor.get("errors") or {}).get("descricao")
-        field_error = f'<span class="error">{esc(message)}</span>' if message else ""
+        field_errors = editor.get("errors") or {}
+        def field_error(key: str) -> str:
+            message = field_errors.get(key)
+            return f'<span class="error">{esc(message)}</span>' if message else ""
         editor_html = f"""
 <section class="editor">
   <h2>{esc(editor["titulo"])}</h2>
@@ -606,7 +639,8 @@ def formas_page(*, rows, q: str, aviso: str, erro: str, editor: dict | None) -> 
     <input type="hidden" name="acao" value="salvar">
     <input type="hidden" name="id" value="{esc(editor["id"])}">
     <input type="hidden" name="q" value="{esc(q)}">
-    <label>Descrição<input name="descricao" maxlength="40" required value="{esc(editor["descricao"])}" autofocus>{field_error}</label>
+    <label>Nome<input name="nome" maxlength="30" required value="{esc(editor["nome"])}" autofocus>{field_error("nome")}</label>
+    <label>Descrição<input name="descricao" maxlength="80" required value="{esc(editor["descricao"])}">{field_error("descricao")}</label>
     <div class="form-actions">
       <button type="submit">Salvar</button>
       <a class="btn" href="{esc(formas_url(q=q))}">Cancelar</a>
@@ -615,15 +649,16 @@ def formas_page(*, rows, q: str, aviso: str, erro: str, editor: dict | None) -> 
 </section>
 """
     body_rows = []
-    for item_id, descricao in rows:
+    for item_id, nome, descricao in rows:
         body_rows.append(
             "<tr>"
-            f'<td class="col-id"><input type="radio" name="id" value="{item_id}" aria-label="Selecionar {esc(descricao)}"></td>'
+            f'<td class="col-id"><input type="radio" name="id" value="{item_id}" aria-label="Selecionar {esc(nome)}"></td>'
             f"<td>{item_id}</td>"
+            f"<td class=\"col-nome\">{esc(nome)}</td>"
             f"<td>{esc(descricao)}</td>"
             "</tr>"
         )
-    grid_body = "".join(body_rows) or '<tr><td colspan="3">Nenhuma forma de pagamento encontrada.</td></tr>'
+    grid_body = "".join(body_rows) or '<tr><td colspan="4">Nenhuma forma de pagamento encontrada.</td></tr>'
     quantidade = len(rows)
     legenda = "1 registro" if quantidade == 1 else f"{quantidade} registros"
     body = f"""
@@ -631,7 +666,7 @@ def formas_page(*, rows, q: str, aviso: str, erro: str, editor: dict | None) -> 
 {flashes}
 <div class="crud-toolbar">
   <form class="search-form" method="get" action="{esc(FORMAS_PATH)}">
-    <input name="q" value="{esc(q)}" placeholder="Descrição" aria-label="Pesquisar formas de pagamento">
+    <input name="q" value="{esc(q)}" placeholder="Nome ou descrição" aria-label="Pesquisar formas de pagamento">
     <button type="submit">Pesquisar</button>
   </form>
   <div class="crud-actions">
@@ -648,7 +683,7 @@ def formas_page(*, rows, q: str, aviso: str, erro: str, editor: dict | None) -> 
     <div class="grid-wrap">
       <table class="grid">
         <thead>
-          <tr><th></th><th>ID</th><th>Descrição</th></tr>
+          <tr><th></th><th>ID</th><th>Nome</th><th>Descrição</th></tr>
         </thead>
         <tbody>{grid_body}</tbody>
       </table>
@@ -950,7 +985,13 @@ class Handler(BaseHTTPRequestHandler):
         editor = None
         with connect() as conn:
             if acao == "incluir":
-                editor = {"titulo": "Incluir forma de pagamento", "id": "", "descricao": "", "errors": {}}
+                editor = {
+                    "titulo": "Incluir forma de pagamento",
+                    "id": "",
+                    "nome": "",
+                    "descricao": "",
+                    "errors": {},
+                }
             elif acao == "editar":
                 item_id = parse_record_id(params.get("id", ""))
                 row = get_forma(conn, item_id) if item_id else None
@@ -960,7 +1001,8 @@ class Handler(BaseHTTPRequestHandler):
                     editor = {
                         "titulo": "Editar forma de pagamento",
                         "id": str(row[0]),
-                        "descricao": row[1],
+                        "nome": row[1],
+                        "descricao": row[2],
                         "errors": {},
                     }
             rows = list_formas(conn, q)
@@ -998,11 +1040,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def save_forma(self, form: dict[str, str], q: str) -> None:
         item_id = parse_record_id(form.get("id", ""))
+        nome = " ".join(form.get("nome", "").split())
         descricao = " ".join(form.get("descricao", "").split())
-        errors = validate_forma(descricao)
+        errors = validate_forma(nome, descricao)
         editor = {
             "titulo": "Editar forma de pagamento" if item_id else "Incluir forma de pagamento",
             "id": str(item_id or ""),
+            "nome": nome,
             "descricao": descricao,
             "errors": errors,
         }
@@ -1021,21 +1065,21 @@ class Handler(BaseHTTPRequestHandler):
                     conn.execute(
                         """
                         UPDATE forma_pagamento
-                        SET descricao = %s, updated_at = now()
+                        SET nome = %s, descricao = %s, updated_at = now()
                         WHERE id = %s
                         """,
-                        (descricao, item_id),
+                        (nome, descricao, item_id),
                     )
                     aviso = "alterado"
                 else:
                     conn.execute(
-                        "INSERT INTO forma_pagamento (descricao) VALUES (%s)",
-                        (descricao,),
+                        "INSERT INTO forma_pagamento (nome, descricao) VALUES (%s, %s)",
+                        (nome, descricao),
                     )
                     aviso = "incluido"
                 conn.commit()
         except psycopg.errors.UniqueViolation:
-            editor["errors"] = {"descricao": "Já existe uma forma de pagamento com esta descrição."}
+            editor["errors"] = {"nome": "Já existe uma forma de pagamento com este nome ou esta descrição."}
             with connect() as conn:
                 rows = list_formas(conn, q)
             self.send_html(400, formas_page(rows=rows, q=q, aviso="", erro="", editor=editor))
