@@ -51,3 +51,16 @@ CREATE UNIQUE INDEX IF NOT EXISTS forma_pagamento_nome_lower_idx
     ON forma_pagamento (lower(nome));
 CREATE UNIQUE INDEX IF NOT EXISTS forma_pagamento_descricao_lower_idx
     ON forma_pagamento (lower(descricao));
+
+CREATE TABLE IF NOT EXISTS condicao_pagamento (
+    id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    qtde_parcelas integer NOT NULL,
+    nome text NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT condicao_pagamento_nome_uniq UNIQUE (nome),
+    CONSTRAINT condicao_pagamento_qtde_chk CHECK (qtde_parcelas BETWEEN 1 AND 48)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS condicao_pagamento_nome_lower_idx
+    ON condicao_pagamento (lower(nome));

@@ -68,6 +68,26 @@ FORMAS_PAGAMENTO_INICIAIS = (
     (8, "PRO", "Promissória"),
 )
 
+CONDICOES_PATH = "/restrito/cadastros/condicoes-de-pagamentos"
+CONDICOES_PAGAMENTO_INICIAIS = (
+    (1, 1, "AVISTA"),
+    (2, 1, "10DD"),
+    (3, 1, "15DD"),
+    (4, 1, "21DD"),
+    (5, 1, "30DD"),
+    (6, 2, "E/10DD"),
+    (7, 2, "E/15DD"),
+    (8, 2, "E/30DD"),
+    (9, 2, "15/30DD"),
+    (10, 2, "30/60DD"),
+    (11, 3, "10/20/30DD"),
+    (12, 3, "15/30/45DD"),
+    (13, 3, "30/60/90DD"),
+    (14, 4, "10/20/30/40DD"),
+    (15, 4, "15/30/45/60DD"),
+    (16, 4, "30/60/90/120DD"),
+)
+
 
 def database_url() -> str:
     return os.environ.get("DATABASE_URL", "").strip()
@@ -124,6 +144,7 @@ def migrate_and_seed() -> None:
             print("Usuário master ainda não existe. Defina ADMIN_PASSWORD para criá-lo.")
         seed_tipos_documento(conn)
         seed_formas_pagamento(conn)
+        seed_condicoes_pagamento(conn)
         conn.commit()
 
 
@@ -190,6 +211,28 @@ def seed_formas_pagamento(conn) -> None:
         SELECT setval(
             pg_get_serial_sequence('forma_pagamento', 'id'),
             GREATEST(COALESCE((SELECT MAX(id) FROM forma_pagamento), 1), 1),
+            true
+        )
+        """
+    )
+
+
+def seed_condicoes_pagamento(conn) -> None:
+    for item_id, qtde, nome in CONDICOES_PAGAMENTO_INICIAIS:
+        conn.execute(
+            """
+            INSERT INTO condicao_pagamento (id, qtde_parcelas, nome)
+            OVERRIDING SYSTEM VALUE
+            VALUES (%s, %s, %s)
+            ON CONFLICT (id) DO NOTHING
+            """,
+            (item_id, qtde, nome),
+        )
+    conn.execute(
+        """
+        SELECT setval(
+            pg_get_serial_sequence('condicao_pagamento', 'id'),
+            GREATEST(COALESCE((SELECT MAX(id) FROM condicao_pagamento), 1), 1),
             true
         )
         """
@@ -728,6 +771,157 @@ grade.querySelectorAll("tbody tr").forEach((row) => {{
     return page("Formas de Pagamentos", body, logged=True, current=FORMAS_PATH, wide=True)
 
 
+def condicoes_url(**params: str) -> str:
+    clean = {key: value for key, value in params.items() if value}
+    if not clean:
+        return CONDICOES_PATH
+    return CONDICOES_PATH + "?" + urlencode(clean)
+
+
+def list_condicoes(conn, q: str):
+    if not q:
+        return conn.execute(
+            "SELECT id, qtde_parcelas, nome FROM condicao_pagamento ORDER BY id"
+        ).fetchall()
+    pattern = like_pattern(q)
+    return conn.execute(
+        """
+        SELECT id, qtde_parcelas, nome
+        FROM condicao_pagamento
+        WHERE nome ILIKE %s ESCAPE '\\'
+           OR qtde_parcelas::text ILIKE %s ESCAPE '\\'
+        ORDER BY id
+        """,
+        (pattern, pattern),
+    ).fetchall()
+
+
+def get_condicao(conn, item_id: int):
+    return conn.execute(
+        "SELECT id, qtde_parcelas, nome FROM condicao_pagamento WHERE id = %s",
+        (item_id,),
+    ).fetchone()
+
+
+def validate_condicao(qtde: str, nome: str) -> dict[str, str]:
+    errors = {}
+    if not qtde.isdigit() or int(qtde) < 1 or int(qtde) > 48:
+        errors["qtde_parcelas"] = "Informe a quantidade de parcelas, de 1 a 48."
+    if not nome:
+        errors["nome"] = "Informe o nome."
+    elif len(nome) > 40:
+        errors["nome"] = "O nome pode ter no máximo 40 caracteres."
+    return errors
+
+
+def condicoes_page(*, rows, q: str, aviso: str, erro: str, editor: dict | None) -> bytes:
+    flashes = ""
+    if aviso:
+        flashes += f'<p class="flash">{esc(aviso)}</p>'
+    if erro:
+        flashes += f'<p class="flash error">{esc(erro)}</p>'
+    editor_html = ""
+    if editor:
+        field_errors = editor.get("errors") or {}
+        def field_error(key: str) -> str:
+            message = field_errors.get(key)
+            return f'<span class="error">{esc(message)}</span>' if message else ""
+        editor_html = f"""
+<section class="editor">
+  <h2>{esc(editor["titulo"])}</h2>
+  <form class="record-form" method="post" action="{esc(CONDICOES_PATH)}">
+    <input type="hidden" name="acao" value="salvar">
+    <input type="hidden" name="id" value="{esc(editor["id"])}">
+    <input type="hidden" name="q" value="{esc(q)}">
+    <label>Qtde Parcelas<input name="qtde_parcelas" inputmode="numeric" maxlength="2" required value="{esc(editor["qtde_parcelas"])}" autofocus>{field_error("qtde_parcelas")}</label>
+    <label>Nome<input name="nome" maxlength="40" required value="{esc(editor["nome"])}">{field_error("nome")}</label>
+    <div class="form-actions">
+      <button type="submit">Salvar</button>
+      <a class="btn" href="{esc(condicoes_url(q=q))}">Cancelar</a>
+    </div>
+  </form>
+</section>
+"""
+    body_rows = []
+    for item_id, qtde, nome in rows:
+        body_rows.append(
+            "<tr>"
+            f'<td class="col-id"><input type="radio" name="id" value="{item_id}" aria-label="Selecionar {esc(nome)}"></td>'
+            f"<td>{item_id}</td>"
+            f"<td>{qtde}</td>"
+            f"<td class=\"col-nome\">{esc(nome)}</td>"
+            "</tr>"
+        )
+    grid_body = "".join(body_rows) or '<tr><td colspan="4">Nenhuma condição de pagamento encontrada.</td></tr>'
+    quantidade = len(rows)
+    legenda = "1 registro" if quantidade == 1 else f"{quantidade} registros"
+    body = f"""
+<h1>Condições de Pagamentos</h1>
+{flashes}
+<div class="crud-toolbar">
+  <form class="search-form" method="get" action="{esc(CONDICOES_PATH)}">
+    <input name="q" value="{esc(q)}" placeholder="Nome ou quantidade de parcelas" aria-label="Pesquisar condições de pagamento">
+    <button type="submit">Pesquisar</button>
+  </form>
+  <div class="crud-actions">
+    <a class="btn" href="{esc(condicoes_url(acao="incluir", q=q))}">Incluir</a>
+    <button type="submit" class="ghost" form="grade-condicoes" name="acao" value="editar" id="editar-condicao">Editar</button>
+    <button type="submit" class="danger" form="grade-condicoes" name="acao" value="excluir" id="deletar-condicao">Deletar</button>
+  </div>
+</div>
+{editor_html}
+<section class="grid-card">
+  <p class="grid-count">{esc(legenda)}</p>
+  <form id="grade-condicoes" method="post" action="{esc(CONDICOES_PATH)}">
+    <input type="hidden" name="q" value="{esc(q)}">
+    <div class="grid-wrap">
+      <table class="grid">
+        <thead>
+          <tr><th></th><th>ID</th><th>Qtde Parcelas</th><th>Nome</th></tr>
+        </thead>
+        <tbody>{grid_body}</tbody>
+      </table>
+    </div>
+  </form>
+</section>
+<script>
+const grade = document.getElementById("grade-condicoes");
+function condicaoSelecionada() {{
+  const marcado = grade.querySelector('input[name="id"]:checked');
+  return marcado ? marcado.value : "";
+}}
+document.getElementById("editar-condicao").addEventListener("click", (event) => {{
+  if (!condicaoSelecionada()) {{
+    event.preventDefault();
+    alert("Selecione um registro na grade.");
+  }}
+}});
+document.getElementById("deletar-condicao").addEventListener("click", (event) => {{
+  if (!condicaoSelecionada()) {{
+    event.preventDefault();
+    alert("Selecione um registro na grade.");
+    return;
+  }}
+  if (!confirm("Deletar a condição de pagamento selecionada?")) event.preventDefault();
+}});
+grade.querySelectorAll("tbody tr").forEach((row) => {{
+  row.addEventListener("click", (event) => {{
+    if (event.target.closest("input,a,button")) return;
+    const radio = row.querySelector('input[type="radio"]');
+    if (radio) radio.checked = true;
+  }});
+  row.addEventListener("dblclick", () => {{
+    const radio = row.querySelector('input[type="radio"]');
+    if (!radio) return;
+    radio.checked = true;
+    document.getElementById("editar-condicao").click();
+  }});
+}});
+</script>
+"""
+    return page("Condições de Pagamentos", body, logged=True, current=CONDICOES_PATH, wide=True)
+
+
 def module_page(title: str, text: str, current: str) -> bytes:
     body = f"""
 <h1>{esc(title)}</h1>
@@ -806,6 +1000,12 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self.handle_formas_get()
             return
+        if path == CONDICOES_PATH:
+            if not user:
+                self.redirect("/restrito/login")
+                return
+            self.handle_condicoes_get()
+            return
         pages = {href.rstrip("/"): (label, text) for href, label, text in CADASTROS + MODULES}
         if path in pages:
             if not user:
@@ -838,6 +1038,12 @@ class Handler(BaseHTTPRequestHandler):
                 self.redirect("/restrito/login")
                 return
             self.handle_formas_post(form)
+            return
+        if path == CONDICOES_PATH:
+            if not current_user(self):
+                self.redirect("/restrito/login")
+                return
+            self.handle_condicoes_post(form)
             return
         self.send_html(404, page("Não encontrado", "<h1>Página não encontrada</h1>"))
 
@@ -1085,6 +1291,123 @@ class Handler(BaseHTTPRequestHandler):
             self.send_html(400, formas_page(rows=rows, q=q, aviso="", erro="", editor=editor))
             return
         self.redirect(formas_url(q=q, aviso=aviso))
+
+    def handle_condicoes_get(self) -> None:
+        params = self.query()
+        q = params.get("q", "").strip()[:80]
+        acao = params.get("acao", "")
+        aviso = {
+            "incluido": "Condição de pagamento incluída.",
+            "alterado": "Condição de pagamento alterada.",
+            "excluido": "Condição de pagamento deletada.",
+        }.get(params.get("aviso", ""), "")
+        erro = {
+            "selecione": "Selecione um registro na grade.",
+            "ausente": "Registro não encontrado.",
+        }.get(params.get("erro", ""), "")
+        editor = None
+        with connect() as conn:
+            if acao == "incluir":
+                editor = {
+                    "titulo": "Incluir condição de pagamento",
+                    "id": "",
+                    "qtde_parcelas": "",
+                    "nome": "",
+                    "errors": {},
+                }
+            elif acao == "editar":
+                item_id = parse_record_id(params.get("id", ""))
+                row = get_condicao(conn, item_id) if item_id else None
+                if row is None:
+                    erro = "Selecione um registro na grade."
+                else:
+                    editor = {
+                        "titulo": "Editar condição de pagamento",
+                        "id": str(row[0]),
+                        "qtde_parcelas": str(row[1]),
+                        "nome": row[2],
+                        "errors": {},
+                    }
+            rows = list_condicoes(conn, q)
+        self.send_html(200, condicoes_page(rows=rows, q=q, aviso=aviso, erro=erro, editor=editor))
+
+    def handle_condicoes_post(self, form: dict[str, str]) -> None:
+        acao = form.get("acao", "")
+        q = form.get("q", "").strip()[:80]
+        if acao == "salvar":
+            self.save_condicao(form, q)
+            return
+        if acao == "editar":
+            item_id = parse_record_id(form.get("id", ""))
+            if item_id is None:
+                self.redirect(condicoes_url(q=q, erro="selecione"))
+                return
+            self.redirect(condicoes_url(acao="editar", id=str(item_id), q=q))
+            return
+        if acao == "excluir":
+            item_id = parse_record_id(form.get("id", ""))
+            if item_id is None:
+                self.redirect(condicoes_url(q=q, erro="selecione"))
+                return
+            with connect() as conn:
+                deleted = conn.execute(
+                    "DELETE FROM condicao_pagamento WHERE id = %s", (item_id,)
+                ).rowcount
+                conn.commit()
+            if not deleted:
+                self.redirect(condicoes_url(q=q, erro="ausente"))
+                return
+            self.redirect(condicoes_url(q=q, aviso="excluido"))
+            return
+        self.redirect(CONDICOES_PATH)
+
+    def save_condicao(self, form: dict[str, str], q: str) -> None:
+        item_id = parse_record_id(form.get("id", ""))
+        qtde = form.get("qtde_parcelas", "").strip()
+        nome = " ".join(form.get("nome", "").split())
+        errors = validate_condicao(qtde, nome)
+        editor = {
+            "titulo": "Editar condição de pagamento" if item_id else "Incluir condição de pagamento",
+            "id": str(item_id or ""),
+            "qtde_parcelas": qtde,
+            "nome": nome,
+            "errors": errors,
+        }
+        if errors:
+            with connect() as conn:
+                rows = list_condicoes(conn, q)
+            self.send_html(400, condicoes_page(rows=rows, q=q, aviso="", erro="", editor=editor))
+            return
+        try:
+            with connect() as conn:
+                if item_id:
+                    found = get_condicao(conn, item_id)
+                    if found is None:
+                        self.redirect(condicoes_url(q=q, erro="ausente"))
+                        return
+                    conn.execute(
+                        """
+                        UPDATE condicao_pagamento
+                        SET qtde_parcelas = %s, nome = %s, updated_at = now()
+                        WHERE id = %s
+                        """,
+                        (int(qtde), nome, item_id),
+                    )
+                    aviso = "alterado"
+                else:
+                    conn.execute(
+                        "INSERT INTO condicao_pagamento (qtde_parcelas, nome) VALUES (%s, %s)",
+                        (int(qtde), nome),
+                    )
+                    aviso = "incluido"
+                conn.commit()
+        except psycopg.errors.UniqueViolation:
+            editor["errors"] = {"nome": "Já existe uma condição de pagamento com este nome."}
+            with connect() as conn:
+                rows = list_condicoes(conn, q)
+            self.send_html(400, condicoes_page(rows=rows, q=q, aviso="", erro="", editor=editor))
+            return
+        self.redirect(condicoes_url(q=q, aviso=aviso))
 
     def handle_login(self, username: str, password: str) -> None:
         username = username.strip()
