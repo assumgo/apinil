@@ -34,3 +34,14 @@ CREATE TABLE IF NOT EXISTS tipo_documento (
 
 CREATE UNIQUE INDEX IF NOT EXISTS tipo_documento_nome_lower_idx
     ON tipo_documento (lower(nome));
+
+CREATE TABLE IF NOT EXISTS forma_pagamento (
+    id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    descricao text NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT forma_pagamento_descricao_uniq UNIQUE (descricao)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS forma_pagamento_descricao_lower_idx
+    ON forma_pagamento (lower(descricao));

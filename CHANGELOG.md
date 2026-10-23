@@ -2,6 +2,11 @@
 
 O número publicado no site fica em `VERSION` e em `public/version.txt`. Cada versão estável recebe uma tag `vX.Y.Z` e um release no GitHub.
 
+## 0.5.0 — 2026-10-23
+
+- Formas de Pagamentos ganha grade com incluir, editar, pesquisar e deletar.
+- A tabela começa com DIH, PIX, BOL, CRE, DEB, CHQ, DUP e PRO.
+
 ## 0.4.0 — 2026-10-22
 
 - Tipos de Documentos ganha grade com incluir, editar, pesquisar e deletar.

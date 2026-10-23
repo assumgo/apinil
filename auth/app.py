@@ -56,6 +56,18 @@ TIPOS_DOCUMENTO_INICIAIS = (
     (20, "GRNE", "Guia Nacional de Recolhimento de Tributos Estaduais", "Estadual"),
 )
 
+FORMAS_PATH = "/restrito/cadastros/formas-de-pagamentos"
+FORMAS_PAGAMENTO_INICIAIS = (
+    (1, "DIH"),
+    (2, "PIX"),
+    (3, "BOL"),
+    (4, "CRE"),
+    (5, "DEB"),
+    (6, "CHQ"),
+    (7, "DUP"),
+    (8, "PRO"),
+)
+
 
 def database_url() -> str:
     return os.environ.get("DATABASE_URL", "").strip()
@@ -111,6 +123,7 @@ def migrate_and_seed() -> None:
         elif row is None:
             print("Usuário master ainda não existe. Defina ADMIN_PASSWORD para criá-lo.")
         seed_tipos_documento(conn)
+        seed_formas_pagamento(conn)
         conn.commit()
 
 
@@ -130,6 +143,28 @@ def seed_tipos_documento(conn) -> None:
         SELECT setval(
             pg_get_serial_sequence('tipo_documento', 'id'),
             GREATEST(COALESCE((SELECT MAX(id) FROM tipo_documento), 1), 1),
+            true
+        )
+        """
+    )
+
+
+def seed_formas_pagamento(conn) -> None:
+    for item_id, descricao in FORMAS_PAGAMENTO_INICIAIS:
+        conn.execute(
+            """
+            INSERT INTO forma_pagamento (id, descricao)
+            OVERRIDING SYSTEM VALUE
+            VALUES (%s, %s)
+            ON CONFLICT ON CONSTRAINT forma_pagamento_descricao_uniq DO NOTHING
+            """,
+            (item_id, descricao),
+        )
+    conn.execute(
+        """
+        SELECT setval(
+            pg_get_serial_sequence('forma_pagamento', 'id'),
+            GREATEST(COALESCE((SELECT MAX(id) FROM forma_pagamento), 1), 1),
             true
         )
         """
@@ -515,6 +550,149 @@ grade.querySelectorAll("tbody tr").forEach((row) => {{
     return page("Tipos de Documentos", body, logged=True, current=TIPOS_PATH, wide=True)
 
 
+def formas_url(**params: str) -> str:
+    clean = {key: value for key, value in params.items() if value}
+    if not clean:
+        return FORMAS_PATH
+    return FORMAS_PATH + "?" + urlencode(clean)
+
+
+def list_formas(conn, q: str):
+    if not q:
+        return conn.execute(
+            "SELECT id, descricao FROM forma_pagamento ORDER BY id"
+        ).fetchall()
+    pattern = like_pattern(q)
+    return conn.execute(
+        """
+        SELECT id, descricao
+        FROM forma_pagamento
+        WHERE descricao ILIKE %s ESCAPE '\\'
+        ORDER BY id
+        """,
+        (pattern,),
+    ).fetchall()
+
+
+def get_forma(conn, item_id: int):
+    return conn.execute(
+        "SELECT id, descricao FROM forma_pagamento WHERE id = %s",
+        (item_id,),
+    ).fetchone()
+
+
+def validate_forma(descricao: str) -> dict[str, str]:
+    if not descricao:
+        return {"descricao": "Informe a descrição."}
+    if len(descricao) > 40:
+        return {"descricao": "A descrição pode ter no máximo 40 caracteres."}
+    return {}
+
+
+def formas_page(*, rows, q: str, aviso: str, erro: str, editor: dict | None) -> bytes:
+    flashes = ""
+    if aviso:
+        flashes += f'<p class="flash">{esc(aviso)}</p>'
+    if erro:
+        flashes += f'<p class="flash error">{esc(erro)}</p>'
+    editor_html = ""
+    if editor:
+        message = (editor.get("errors") or {}).get("descricao")
+        field_error = f'<span class="error">{esc(message)}</span>' if message else ""
+        editor_html = f"""
+<section class="editor">
+  <h2>{esc(editor["titulo"])}</h2>
+  <form class="record-form" method="post" action="{esc(FORMAS_PATH)}">
+    <input type="hidden" name="acao" value="salvar">
+    <input type="hidden" name="id" value="{esc(editor["id"])}">
+    <input type="hidden" name="q" value="{esc(q)}">
+    <label>Descrição<input name="descricao" maxlength="40" required value="{esc(editor["descricao"])}" autofocus>{field_error}</label>
+    <div class="form-actions">
+      <button type="submit">Salvar</button>
+      <a class="btn" href="{esc(formas_url(q=q))}">Cancelar</a>
+    </div>
+  </form>
+</section>
+"""
+    body_rows = []
+    for item_id, descricao in rows:
+        body_rows.append(
+            "<tr>"
+            f'<td class="col-id"><input type="radio" name="id" value="{item_id}" aria-label="Selecionar {esc(descricao)}"></td>'
+            f"<td>{item_id}</td>"
+            f"<td>{esc(descricao)}</td>"
+            "</tr>"
+        )
+    grid_body = "".join(body_rows) or '<tr><td colspan="3">Nenhuma forma de pagamento encontrada.</td></tr>'
+    quantidade = len(rows)
+    legenda = "1 registro" if quantidade == 1 else f"{quantidade} registros"
+    body = f"""
+<h1>Formas de Pagamentos</h1>
+{flashes}
+<div class="crud-toolbar">
+  <form class="search-form" method="get" action="{esc(FORMAS_PATH)}">
+    <input name="q" value="{esc(q)}" placeholder="Descrição" aria-label="Pesquisar formas de pagamento">
+    <button type="submit">Pesquisar</button>
+  </form>
+  <div class="crud-actions">
+    <a class="btn" href="{esc(formas_url(acao="incluir", q=q))}">Incluir</a>
+    <button type="submit" class="ghost" form="grade-formas" name="acao" value="editar" id="editar-forma">Editar</button>
+    <button type="submit" class="danger" form="grade-formas" name="acao" value="excluir" id="deletar-forma">Deletar</button>
+  </div>
+</div>
+{editor_html}
+<section class="grid-card">
+  <p class="grid-count">{esc(legenda)}</p>
+  <form id="grade-formas" method="post" action="{esc(FORMAS_PATH)}">
+    <input type="hidden" name="q" value="{esc(q)}">
+    <div class="grid-wrap">
+      <table class="grid">
+        <thead>
+          <tr><th></th><th>ID</th><th>Descrição</th></tr>
+        </thead>
+        <tbody>{grid_body}</tbody>
+      </table>
+    </div>
+  </form>
+</section>
+<script>
+const grade = document.getElementById("grade-formas");
+function formaSelecionada() {{
+  const marcado = grade.querySelector('input[name="id"]:checked');
+  return marcado ? marcado.value : "";
+}}
+document.getElementById("editar-forma").addEventListener("click", (event) => {{
+  if (!formaSelecionada()) {{
+    event.preventDefault();
+    alert("Selecione um registro na grade.");
+  }}
+}});
+document.getElementById("deletar-forma").addEventListener("click", (event) => {{
+  if (!formaSelecionada()) {{
+    event.preventDefault();
+    alert("Selecione um registro na grade.");
+    return;
+  }}
+  if (!confirm("Deletar a forma de pagamento selecionada?")) event.preventDefault();
+}});
+grade.querySelectorAll("tbody tr").forEach((row) => {{
+  row.addEventListener("click", (event) => {{
+    if (event.target.closest("input,a,button")) return;
+    const radio = row.querySelector('input[type="radio"]');
+    if (radio) radio.checked = true;
+  }});
+  row.addEventListener("dblclick", () => {{
+    const radio = row.querySelector('input[type="radio"]');
+    if (!radio) return;
+    radio.checked = true;
+    document.getElementById("editar-forma").click();
+  }});
+}});
+</script>
+"""
+    return page("Formas de Pagamentos", body, logged=True, current=FORMAS_PATH, wide=True)
+
+
 def module_page(title: str, text: str, current: str) -> bytes:
     body = f"""
 <h1>{esc(title)}</h1>
@@ -587,6 +765,12 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self.handle_tipos_get()
             return
+        if path == FORMAS_PATH:
+            if not user:
+                self.redirect("/restrito/login")
+                return
+            self.handle_formas_get()
+            return
         pages = {href.rstrip("/"): (label, text) for href, label, text in CADASTROS + MODULES}
         if path in pages:
             if not user:
@@ -613,6 +797,12 @@ class Handler(BaseHTTPRequestHandler):
                 self.redirect("/restrito/login")
                 return
             self.handle_tipos_post(form)
+            return
+        if path == FORMAS_PATH:
+            if not current_user(self):
+                self.redirect("/restrito/login")
+                return
+            self.handle_formas_post(form)
             return
         self.send_html(404, page("Não encontrado", "<h1>Página não encontrada</h1>"))
 
@@ -743,6 +933,114 @@ class Handler(BaseHTTPRequestHandler):
             self.send_html(400, tipos_page(rows=rows, q=q, aviso="", erro="", editor=editor))
             return
         self.redirect(tipos_url(q=q, aviso=aviso))
+
+    def handle_formas_get(self) -> None:
+        params = self.query()
+        q = params.get("q", "").strip()[:80]
+        acao = params.get("acao", "")
+        aviso = {
+            "incluido": "Forma de pagamento incluída.",
+            "alterado": "Forma de pagamento alterada.",
+            "excluido": "Forma de pagamento deletada.",
+        }.get(params.get("aviso", ""), "")
+        erro = {
+            "selecione": "Selecione um registro na grade.",
+            "ausente": "Registro não encontrado.",
+        }.get(params.get("erro", ""), "")
+        editor = None
+        with connect() as conn:
+            if acao == "incluir":
+                editor = {"titulo": "Incluir forma de pagamento", "id": "", "descricao": "", "errors": {}}
+            elif acao == "editar":
+                item_id = parse_record_id(params.get("id", ""))
+                row = get_forma(conn, item_id) if item_id else None
+                if row is None:
+                    erro = "Selecione um registro na grade."
+                else:
+                    editor = {
+                        "titulo": "Editar forma de pagamento",
+                        "id": str(row[0]),
+                        "descricao": row[1],
+                        "errors": {},
+                    }
+            rows = list_formas(conn, q)
+        self.send_html(200, formas_page(rows=rows, q=q, aviso=aviso, erro=erro, editor=editor))
+
+    def handle_formas_post(self, form: dict[str, str]) -> None:
+        acao = form.get("acao", "")
+        q = form.get("q", "").strip()[:80]
+        if acao == "salvar":
+            self.save_forma(form, q)
+            return
+        if acao == "editar":
+            item_id = parse_record_id(form.get("id", ""))
+            if item_id is None:
+                self.redirect(formas_url(q=q, erro="selecione"))
+                return
+            self.redirect(formas_url(acao="editar", id=str(item_id), q=q))
+            return
+        if acao == "excluir":
+            item_id = parse_record_id(form.get("id", ""))
+            if item_id is None:
+                self.redirect(formas_url(q=q, erro="selecione"))
+                return
+            with connect() as conn:
+                deleted = conn.execute(
+                    "DELETE FROM forma_pagamento WHERE id = %s", (item_id,)
+                ).rowcount
+                conn.commit()
+            if not deleted:
+                self.redirect(formas_url(q=q, erro="ausente"))
+                return
+            self.redirect(formas_url(q=q, aviso="excluido"))
+            return
+        self.redirect(FORMAS_PATH)
+
+    def save_forma(self, form: dict[str, str], q: str) -> None:
+        item_id = parse_record_id(form.get("id", ""))
+        descricao = " ".join(form.get("descricao", "").split())
+        errors = validate_forma(descricao)
+        editor = {
+            "titulo": "Editar forma de pagamento" if item_id else "Incluir forma de pagamento",
+            "id": str(item_id or ""),
+            "descricao": descricao,
+            "errors": errors,
+        }
+        if errors:
+            with connect() as conn:
+                rows = list_formas(conn, q)
+            self.send_html(400, formas_page(rows=rows, q=q, aviso="", erro="", editor=editor))
+            return
+        try:
+            with connect() as conn:
+                if item_id:
+                    found = get_forma(conn, item_id)
+                    if found is None:
+                        self.redirect(formas_url(q=q, erro="ausente"))
+                        return
+                    conn.execute(
+                        """
+                        UPDATE forma_pagamento
+                        SET descricao = %s, updated_at = now()
+                        WHERE id = %s
+                        """,
+                        (descricao, item_id),
+                    )
+                    aviso = "alterado"
+                else:
+                    conn.execute(
+                        "INSERT INTO forma_pagamento (descricao) VALUES (%s)",
+                        (descricao,),
+                    )
+                    aviso = "incluido"
+                conn.commit()
+        except psycopg.errors.UniqueViolation:
+            editor["errors"] = {"descricao": "Já existe uma forma de pagamento com esta descrição."}
+            with connect() as conn:
+                rows = list_formas(conn, q)
+            self.send_html(400, formas_page(rows=rows, q=q, aviso="", erro="", editor=editor))
+            return
+        self.redirect(formas_url(q=q, aviso=aviso))
 
     def handle_login(self, username: str, password: str) -> None:
         username = username.strip()
