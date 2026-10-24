@@ -23,6 +23,7 @@ CADASTROS = (
     ("/restrito/cadastros/tipos-de-documentos", "Tipos de Documentos", "Tipos usados em títulos e lançamentos."),
     ("/restrito/cadastros/condicoes-de-pagamentos", "Condições de Pagamentos", "Prazos e parcelas das negociações."),
     ("/restrito/cadastros/formas-de-pagamentos", "Formas de Pagamentos", "Meios usados para pagar e receber."),
+    ("/restrito/cadastros/centros-de-custo", "Centros de Custo", "Centros usados para classificar gastos e receitas."),
     ("/restrito/cadastros/usuarios", "Usuários", "Pessoas com acesso à área restrita."),
 )
 
