@@ -256,8 +256,7 @@ def nav_link(href: str, label: str, current: str, *, sub: bool = False) -> str:
 
 
 def side_nav(current: str) -> str:
-    links = [nav_link("/restrito/", "Painel", current)]
-    links.append(nav_link("/restrito/cadastros", "Cadastros", current))
+    links = [nav_link("/restrito/cadastros", "Cadastros", current)]
     links.append(
         '<div class="submenu">'
         + "".join(nav_link(href, label, current, sub=True) for href, label, _text in CADASTROS)
@@ -292,7 +291,7 @@ def page(title: str, body: str, *, logged: bool = False, current: str = "", wide
   <header class="site-header">
     <div class="header-inner">
       <a class="brand" href="/about-1/"><img src="/assets/img/logo.png" alt="Apinil cosméticos"></a>
-      <a class="restrito-link" href="/restrito/" aria-label="Área restrita" title="Área restrita">{LOCK}</a>
+      <a class="restrito-link" href="/restrito/cadastros" aria-label="Área restrita" title="Área restrita">{LOCK}</a>
     </div>
   </header>
   <div class="{shell_class}">{nav}<main class="restrito-main">{body}</main></div>
@@ -423,16 +422,6 @@ def cards_for(items) -> str:
             f'<a class="module-card" href="{esc(href)}"><h2>{esc(label)}</h2><p>{esc(text)}</p></a>'
         )
     return f'<div class="module-grid">{"".join(cards)}</div>'
-
-
-def dashboard(user) -> bytes:
-    items = (("/restrito/cadastros", "Cadastros", "Pessoas, documentos, pagamentos e usuários."),) + MODULES
-    body = f"""
-<h1>Painel</h1>
-<p class="prose" style="text-align:left;margin-left:0">Olá, {esc(user["name"])}. Escolha um módulo.</p>
-{cards_for(items)}
-"""
-    return page("Painel", body, logged=True, current="/restrito")
 
 
 def cadastros_page() -> bytes:
@@ -973,7 +962,7 @@ class Handler(BaseHTTPRequestHandler):
         if path in ("/restrito/login",):
             user = current_user(self)
             if user:
-                self.redirect("/restrito/")
+                self.redirect("/restrito/cadastros")
                 return
             self.send_html(200, login_form())
             return
@@ -982,7 +971,7 @@ class Handler(BaseHTTPRequestHandler):
             if not user:
                 self.redirect("/restrito/login")
                 return
-            self.send_html(200, dashboard(user))
+            self.redirect("/restrito/cadastros")
             return
         if path == "/restrito/cadastros":
             if not user:
@@ -1441,7 +1430,7 @@ class Handler(BaseHTTPRequestHandler):
             f"{SESSION_COOKIE}={token}; HttpOnly; SameSite=Lax; Path=/; "
             f"Max-Age={SESSION_HOURS * 3600}"
         )
-        self.redirect("/restrito/", cookie=cookie)
+        self.redirect("/restrito/cadastros", cookie=cookie)
 
     def handle_logout(self) -> None:
         token = ""

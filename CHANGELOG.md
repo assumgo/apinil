@@ -2,6 +2,10 @@
 
 O número publicado no site fica em `VERSION` e em `public/version.txt`. Cada versão estável recebe uma tag `vX.Y.Z` e um release no GitHub.
 
+## 0.6.3 — 2026-10-24
+
+- O menu Painel sai da área restrita. O cadeado e o login abrem Cadastros.
+
 ## 0.6.2 — 2026-10-23
 
 - Cadastros ganha o submenu Centros de Custo.
