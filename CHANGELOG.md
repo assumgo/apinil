@@ -2,6 +2,11 @@
 
 O número publicado no site fica em `VERSION` e em `public/version.txt`. Cada versão estável recebe uma tag `vX.Y.Z` e um release no GitHub.
 
+## 0.8.0 — 2026-11-07
+
+- Centros de Custo ganha formulário com ID, código reduzido, nome e descrição.
+- Inserir, editar e excluir. O ID é gerado pelo sistema e não pode ser alterado. O código reduzido é único.
+
 ## 0.7.0 — 2026-11-07
 
 - Cadastro de usuários com nome, login, e-mail único e senha.

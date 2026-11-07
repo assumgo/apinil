@@ -72,10 +72,12 @@ FORMAS_PAGAMENTO_INICIAIS = (
 )
 
 CONDICOES_PATH = "/restrito/cadastros/condicoes-de-pagamentos"
+CENTROS_PATH = "/restrito/cadastros/centros-de-custo"
 USUARIOS_PATH = "/restrito/cadastros/usuarios"
 PASSWORD_PATH = "/restrito/trocar-senha"
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 LOGIN_RE = re.compile(r"^[A-Za-z0-9._-]{3,40}$")
+CODIGO_REDUZIDO_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9./-]{0,19}$")
 CONDICOES_PAGAMENTO_INICIAIS = (
     (1, 1, "AVISTA"),
     (2, 1, "10DD"),
@@ -359,6 +361,10 @@ button.danger { background: #8d2b2b; }
 .record-form select {
   font: inherit; border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; background: #fff;
 }
+.record-form input[readonly] {
+  background: #f3f6f4; color: var(--muted); cursor: default;
+}
+.record-form textarea { min-height: 96px; resize: vertical; }
 .grid-wrap { overflow-x: auto; }
 table.grid { width: 100%; border-collapse: collapse; font-size: 15px; }
 table.grid th {
@@ -369,6 +375,7 @@ table.grid tbody tr { cursor: pointer; }
 table.grid tbody tr:hover { background: #f4faf6; }
 table.grid tbody tr:has(input:checked) { background: #e7f5ec; }
 .col-id { width: 72px; }
+.col-codigo { width: 150px; white-space: nowrap; }
 .col-nome { width: 110px; white-space: nowrap; }
 .col-esfera { width: 130px; }
 .grid-count { color: var(--muted); margin: 0 0 12px; }
@@ -931,6 +938,169 @@ grade.querySelectorAll("tbody tr").forEach((row) => {{
     return page("Condições de Pagamentos", body, logged=True, current=CONDICOES_PATH, wide=True)
 
 
+def centros_url(**params: str) -> str:
+    clean = {key: value for key, value in params.items() if value}
+    if not clean:
+        return CENTROS_PATH
+    return CENTROS_PATH + "?" + urlencode(clean)
+
+
+def list_centros(conn, q: str):
+    if not q:
+        return conn.execute(
+            "SELECT id, codigo_reduzido, nome, descricao FROM centro_custo ORDER BY id"
+        ).fetchall()
+    pattern = like_pattern(q)
+    return conn.execute(
+        """
+        SELECT id, codigo_reduzido, nome, descricao
+        FROM centro_custo
+        WHERE codigo_reduzido ILIKE %s ESCAPE '\\'
+           OR nome ILIKE %s ESCAPE '\\'
+           OR descricao ILIKE %s ESCAPE '\\'
+        ORDER BY id
+        """,
+        (pattern, pattern, pattern),
+    ).fetchall()
+
+
+def get_centro(conn, item_id: int):
+    return conn.execute(
+        "SELECT id, codigo_reduzido, nome, descricao FROM centro_custo WHERE id = %s",
+        (item_id,),
+    ).fetchone()
+
+
+def validate_centro(codigo: str, nome: str, descricao: str) -> dict[str, str]:
+    errors = {}
+    if not codigo:
+        errors["codigo_reduzido"] = "Informe o código reduzido."
+    elif not CODIGO_REDUZIDO_RE.fullmatch(codigo):
+        errors["codigo_reduzido"] = "Use letras, números e os sinais . - / , com no máximo 20 caracteres."
+    if not nome:
+        errors["nome"] = "Informe o nome."
+    elif len(nome) > 80:
+        errors["nome"] = "O nome pode ter no máximo 80 caracteres."
+    if not descricao:
+        errors["descricao"] = "Informe a descrição."
+    elif len(descricao) > 200:
+        errors["descricao"] = "A descrição pode ter no máximo 200 caracteres."
+    return errors
+
+
+def centros_page(*, rows, q: str, aviso: str, erro: str, editor: dict | None) -> bytes:
+    flashes = ""
+    if aviso:
+        flashes += f'<p class="flash">{esc(aviso)}</p>'
+    if erro:
+        flashes += f'<p class="flash error">{esc(erro)}</p>'
+    editor_html = ""
+    if editor:
+        field_errors = editor.get("errors") or {}
+
+        def field_error(key: str) -> str:
+            message = field_errors.get(key)
+            return f'<span class="error">{esc(message)}</span>' if message else ""
+
+        editor_html = f"""
+<section class="editor">
+  <h2>{esc(editor["titulo"])}</h2>
+  <form class="record-form" method="post" action="{esc(CENTROS_PATH)}">
+    <input type="hidden" name="acao" value="salvar">
+    <input type="hidden" name="id" value="{esc(editor["id"])}">
+    <input type="hidden" name="q" value="{esc(q)}">
+    <label>ID<input value="{esc(editor["id"])}" readonly tabindex="-1" placeholder="Gerado ao salvar"></label>
+    <label>Código reduzido<input name="codigo_reduzido" maxlength="20" required value="{esc(editor["codigo_reduzido"])}" autocomplete="off" autofocus>{field_error("codigo_reduzido")}</label>
+    <label>Nome<input name="nome" maxlength="80" required value="{esc(editor["nome"])}">{field_error("nome")}</label>
+    <label>Descrição<textarea name="descricao" maxlength="200" required>{esc(editor["descricao"])}</textarea>{field_error("descricao")}</label>
+    <div class="form-actions">
+      <button type="submit">Salvar</button>
+      <a class="btn" href="{esc(centros_url(q=q))}">Cancelar</a>
+    </div>
+  </form>
+</section>
+"""
+    body_rows = []
+    for item_id, codigo, nome, descricao in rows:
+        body_rows.append(
+            "<tr>"
+            f'<td class="col-id"><input type="radio" name="id" value="{item_id}" aria-label="Selecionar {esc(codigo)}"></td>'
+            f"<td>{item_id}</td>"
+            f'<td class="col-codigo">{esc(codigo)}</td>'
+            f"<td>{esc(nome)}</td>"
+            f"<td>{esc(descricao) if descricao else '—'}</td>"
+            "</tr>"
+        )
+    grid_body = "".join(body_rows) or '<tr><td colspan="5">Nenhum centro de custo encontrado.</td></tr>'
+    quantidade = len(rows)
+    legenda = "1 registro" if quantidade == 1 else f"{quantidade} registros"
+    body = f"""
+<h1>Centros de Custo</h1>
+{flashes}
+<div class="crud-toolbar">
+  <form class="search-form" method="get" action="{esc(CENTROS_PATH)}">
+    <input name="q" value="{esc(q)}" placeholder="Código, nome ou descrição" aria-label="Pesquisar centros de custo">
+    <button type="submit">Pesquisar</button>
+  </form>
+  <div class="crud-actions">
+    <a class="btn" href="{esc(centros_url(acao="incluir", q=q))}">Inserir</a>
+    <button type="submit" class="ghost" form="grade-centros" name="acao" value="editar" id="editar-centro">Editar</button>
+    <button type="submit" class="danger" form="grade-centros" name="acao" value="excluir" id="excluir-centro">Excluir</button>
+  </div>
+</div>
+{editor_html}
+<section class="grid-card">
+  <p class="grid-count">{esc(legenda)}</p>
+  <form id="grade-centros" method="post" action="{esc(CENTROS_PATH)}">
+    <input type="hidden" name="q" value="{esc(q)}">
+    <div class="grid-wrap">
+      <table class="grid">
+        <thead>
+          <tr><th></th><th>ID</th><th>Código reduzido</th><th>Nome</th><th>Descrição</th></tr>
+        </thead>
+        <tbody>{grid_body}</tbody>
+      </table>
+    </div>
+  </form>
+</section>
+<script>
+const grade = document.getElementById("grade-centros");
+function centroSelecionado() {{
+  const marcado = grade.querySelector('input[name="id"]:checked');
+  return marcado ? marcado.value : "";
+}}
+document.getElementById("editar-centro").addEventListener("click", (event) => {{
+  if (!centroSelecionado()) {{
+    event.preventDefault();
+    alert("Selecione um registro na grade.");
+  }}
+}});
+document.getElementById("excluir-centro").addEventListener("click", (event) => {{
+  if (!centroSelecionado()) {{
+    event.preventDefault();
+    alert("Selecione um registro na grade.");
+    return;
+  }}
+  if (!confirm("Excluir o centro de custo selecionado?")) event.preventDefault();
+}});
+grade.querySelectorAll("tbody tr").forEach((row) => {{
+  row.addEventListener("click", (event) => {{
+    if (event.target.closest("input,a,button")) return;
+    const radio = row.querySelector('input[type="radio"]');
+    if (radio) radio.checked = true;
+  }});
+  row.addEventListener("dblclick", () => {{
+    const radio = row.querySelector('input[type="radio"]');
+    if (!radio) return;
+    radio.checked = true;
+    document.getElementById("editar-centro").click();
+  }});
+}});
+</script>
+"""
+    return page("Centros de Custo", body, logged=True, current=CENTROS_PATH, wide=True)
+
+
 def is_admin(user) -> bool:
     return user.get("role") in ("master", "admin")
 
@@ -1329,6 +1499,12 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self.handle_condicoes_get()
             return
+        if path == CENTROS_PATH:
+            if not user:
+                self.redirect("/restrito/login")
+                return
+            self.handle_centros_get()
+            return
         if path == USUARIOS_PATH:
             if not user:
                 self.redirect("/restrito/login")
@@ -1387,6 +1563,12 @@ class Handler(BaseHTTPRequestHandler):
                 self.redirect("/restrito/login")
                 return
             self.handle_condicoes_post(form)
+            return
+        if path == CENTROS_PATH:
+            if not current_user(self):
+                self.redirect("/restrito/login")
+                return
+            self.handle_centros_post(form)
             return
         if path == USUARIOS_PATH:
             if not user:
@@ -1760,6 +1942,132 @@ class Handler(BaseHTTPRequestHandler):
             self.send_html(400, condicoes_page(rows=rows, q=q, aviso="", erro="", editor=editor))
             return
         self.redirect(condicoes_url(q=q, aviso=aviso))
+
+    def handle_centros_get(self) -> None:
+        params = self.query()
+        q = params.get("q", "").strip()[:80]
+        acao = params.get("acao", "")
+        aviso = {
+            "incluido": "Centro de custo inserido.",
+            "alterado": "Centro de custo alterado.",
+            "excluido": "Centro de custo excluído.",
+        }.get(params.get("aviso", ""), "")
+        erro = {
+            "selecione": "Selecione um registro na grade.",
+            "ausente": "Registro não encontrado.",
+        }.get(params.get("erro", ""), "")
+        editor = None
+        with connect() as conn:
+            if acao == "incluir":
+                editor = {
+                    "titulo": "Inserir centro de custo",
+                    "id": "",
+                    "codigo_reduzido": "",
+                    "nome": "",
+                    "descricao": "",
+                    "errors": {},
+                }
+            elif acao == "editar":
+                item_id = parse_record_id(params.get("id", ""))
+                row = get_centro(conn, item_id) if item_id else None
+                if row is None:
+                    erro = "Selecione um registro na grade."
+                else:
+                    editor = {
+                        "titulo": "Editar centro de custo",
+                        "id": str(row[0]),
+                        "codigo_reduzido": row[1],
+                        "nome": row[2],
+                        "descricao": row[3],
+                        "errors": {},
+                    }
+            rows = list_centros(conn, q)
+        self.send_html(200, centros_page(rows=rows, q=q, aviso=aviso, erro=erro, editor=editor))
+
+    def handle_centros_post(self, form: dict[str, str]) -> None:
+        acao = form.get("acao", "")
+        q = form.get("q", "").strip()[:80]
+        if acao == "salvar":
+            self.save_centro(form, q)
+            return
+        if acao == "editar":
+            item_id = parse_record_id(form.get("id", ""))
+            if item_id is None:
+                self.redirect(centros_url(q=q, erro="selecione"))
+                return
+            self.redirect(centros_url(acao="editar", id=str(item_id), q=q))
+            return
+        if acao == "excluir":
+            item_id = parse_record_id(form.get("id", ""))
+            if item_id is None:
+                self.redirect(centros_url(q=q, erro="selecione"))
+                return
+            with connect() as conn:
+                deleted = conn.execute(
+                    "DELETE FROM centro_custo WHERE id = %s", (item_id,)
+                ).rowcount
+                conn.commit()
+            if not deleted:
+                self.redirect(centros_url(q=q, erro="ausente"))
+                return
+            self.redirect(centros_url(q=q, aviso="excluido"))
+            return
+        self.redirect(CENTROS_PATH)
+
+    def save_centro(self, form: dict[str, str], q: str) -> None:
+        item_id = parse_record_id(form.get("id", ""))
+        codigo = form.get("codigo_reduzido", "").strip()
+        nome = " ".join(form.get("nome", "").split())
+        descricao = " ".join(form.get("descricao", "").split())
+        errors = validate_centro(codigo, nome, descricao)
+        editor = {
+            "titulo": "Editar centro de custo" if item_id else "Inserir centro de custo",
+            "id": str(item_id or ""),
+            "codigo_reduzido": codigo,
+            "nome": nome,
+            "descricao": descricao,
+            "errors": errors,
+        }
+        if errors:
+            with connect() as conn:
+                rows = list_centros(conn, q)
+            self.send_html(400, centros_page(rows=rows, q=q, aviso="", erro="", editor=editor))
+            return
+        try:
+            with connect() as conn:
+                if item_id:
+                    found = get_centro(conn, item_id)
+                    if found is None:
+                        self.redirect(centros_url(q=q, erro="ausente"))
+                        return
+                    conn.execute(
+                        """
+                        UPDATE centro_custo
+                        SET codigo_reduzido = %s, nome = %s, descricao = %s, updated_at = now()
+                        WHERE id = %s
+                        """,
+                        (codigo, nome, descricao, item_id),
+                    )
+                    aviso = "alterado"
+                else:
+                    conn.execute(
+                        """
+                        INSERT INTO centro_custo (codigo_reduzido, nome, descricao)
+                        VALUES (%s, %s, %s)
+                        """,
+                        (codigo, nome, descricao),
+                    )
+                    aviso = "incluido"
+                conn.commit()
+        except psycopg.errors.UniqueViolation:
+            editor["errors"] = {
+                "codigo_reduzido": "Já existe um centro de custo com este código reduzido."
+            }
+            with connect() as conn:
+                rows = list_centros(conn, q)
+            self.send_html(400, centros_page(rows=rows, q=q, aviso="", erro="", editor=editor))
+            return
+        self.redirect(centros_url(q=q, aviso=aviso))
 
     def handle_usuarios_get(self, user) -> None:
         params = self.query()
