@@ -1,0 +1,296 @@
+[
+  {
+    "title": "Pele",
+    "path": "/",
+    "image": "/assets/img/510543_0d5e6811437c4616b49b866546208eae-mv2.png.webp",
+    "detail": false
+  },
+  {
+    "title": "GEL 30 ERVAS 150G E 250G",
+    "path": "/30-ervas/",
+    "image": "/assets/img/510543_e3cc24cf63b84b518452e45a2a36ae9a-mv2.jpeg.webp",
+    "detail": true
+  },
+  {
+    "title": "Home",
+    "path": "/about-1/",
+    "image": "/assets/img/510543_4895648c869543b9a4e12068f9069765-mv2.png.webp",
+    "detail": false
+  },
+  {
+    "title": "GEL MASSAGEADOR 190G",
+    "path": "/arnica/",
+    "image": "/assets/img/510543_c592313e4422492caeb57c5fb64e327f-mv2.jpeg.webp",
+    "detail": true
+  },
+  {
+    "title": "Sobre",
+    "path": "/biography/",
+    "image": "/assets/img/11062b_dcbcffb690f345e69f3019ec9591818d-mv2_d_6192_6192_s_4_2.jpg.webp",
+    "detail": false
+  },
+  {
+    "title": "Sabonetes",
+    "path": "/blog/",
+    "image": null,
+    "detail": false
+  },
+  {
+    "title": "Catálogo",
+    "path": "/catálogo/",
+    "image": null,
+    "detail": false
+  },
+  {
+    "title": "CHEIRINHOS",
+    "path": "/cheirinhos/",
+    "image": "/assets/img/510543_6516d1b6d51f4cd090c4ed046aed6f02-mv2.jpeg.webp",
+    "detail": true
+  },
+  {
+    "title": "Contatos",
+    "path": "/contact/",
+    "image": "/assets/img/510543_7c052f16f15f401c866b56e00c6ae4c0-mv2.jpg.webp",
+    "detail": false
+  },
+  {
+    "title": "CREME SEBO DE CARNEIRO  PÉS & MÃOS",
+    "path": "/creme-sebo-de-carneiro-pés-mãos/",
+    "image": "/assets/img/510543_8a706756f7ee4e65995192633766b9d3-mv2.png.webp",
+    "detail": true
+  },
+  {
+    "title": "SKIN CARE",
+    "path": "/cópia-corpo-banho/",
+    "image": "/assets/img/11062b_c30f10e891234f66bcbbfc08a483fda4-mv2.jpeg.webp",
+    "detail": false
+  },
+  {
+    "title": "SABONETE FACIAL",
+    "path": "/cópia-mousse-micelar/",
+    "image": "/assets/img/510543_5ea0189a68b242a3a33428dd5fcd0dd3-mv2.jpeg.webp",
+    "detail": true
+  },
+  {
+    "title": "LINHA CAPILAR",
+    "path": "/cópia-sabonete-feminino-1/",
+    "image": "/assets/img/510543_356de4fc46834c7bbc635920768c89a6-mv2.jpg.webp",
+    "detail": false
+  },
+  {
+    "title": "PELE",
+    "path": "/cópia-sabonete-masculino/",
+    "image": "/assets/img/510543_a73b3e714da64726957d3f6cc80e6e9d-mv2.jpg.webp",
+    "detail": false
+  },
+  {
+    "title": "MOUSSE MICELAR",
+    "path": "/cópia-skin-care/",
+    "image": "/assets/img/510543_9eb786936a0d4c4492ee2360ff492bbc-mv2.jpeg.webp",
+    "detail": true
+  },
+  {
+    "title": "DEO COLÔNIA MASCULINA",
+    "path": "/deo-arrazo/",
+    "image": "/assets/img/510543_2ada953ed3764fc094d936465c23984d-mv2.jpeg.webp",
+    "detail": true
+  },
+  {
+    "title": "BODY SPLASH 130ML",
+    "path": "/deo-colonia-vida-bella/",
+    "image": "/assets/img/510543_a05df6c8759d4bfb96b22fcf880d139a-mv2.jpeg.webp",
+    "detail": true
+  },
+  {
+    "title": "DEO COLÔNIA FEMENINA",
+    "path": "/deo-colônia-vibe/",
+    "image": "/assets/img/510543_c14dbf347fa441f49f6d06f1e1ce2576-mv2.jpeg.webp",
+    "detail": true
+  },
+  {
+    "title": "BODY SPLASH GLOW",
+    "path": "/deo-couros/",
+    "image": "/assets/img/510543_cf7f89f1d33c4acba3bf37c766a2df4e-mv2.jpeg.webp",
+    "detail": true
+  },
+  {
+    "title": "BODY SPLASH ÁRABE",
+    "path": "/deo-dolce-mulher/",
+    "image": "/assets/img/510543_574a2736e78b4cc09459f0d6596b46fd-mv2.jpeg.webp",
+    "detail": true
+  },
+  {
+    "title": "BODY SPLASH ÁRABE MASCULINO",
+    "path": "/deo-madeira/",
+    "image": "/assets/img/510543_218083a8c7464b2199ec3e6db8a8b90a-mv2.jpeg.webp",
+    "detail": true
+  },
+  {
+    "title": "BODY SPLASH",
+    "path": "/deo-val-pires/",
+    "image": "/assets/img/510543_4ac224ab0c944e188aecb5682846be79-mv2.jpg.webp",
+    "detail": true
+  },
+  {
+    "title": "PERFUMARIA",
+    "path": "/desodorante-e-colonia/",
+    "image": "/assets/img/11062b_7eb64053e0164bfa86655518dbd4e48f-mv2.jpeg.webp",
+    "detail": false
+  },
+  {
+    "title": "ESFOLIANTES 190G",
+    "path": "/esfoliantes-190g/",
+    "image": "/assets/img/510543_ba4af7df6d36494085988644c1cc591c-mv2.jpeg.webp",
+    "detail": true
+  },
+  {
+    "title": "POMADA TUCANDEIRA 100G",
+    "path": "/extra-forte/",
+    "image": "/assets/img/510543_e0dcb337ecf24fc8ace023721ae9c540-mv2.png.webp",
+    "detail": true
+  },
+  {
+    "title": "Produtos",
+    "path": "/gallery/",
+    "image": "/assets/img/510543_e3cc24cf63b84b518452e45a2a36ae9a-mv2.jpeg.webp",
+    "detail": false
+  },
+  {
+    "title": "MASSAGEADORES",
+    "path": "/gel-massageador/",
+    "image": "/assets/img/510543_ce936b1f52144beca40a8ba8156b4ead-mv2.png.webp",
+    "detail": false
+  },
+  {
+    "title": "HIDRATANTE SEBO DE CARNEIRO 190G E 240G",
+    "path": "/hidratante-sebo-de-carneiro/",
+    "image": "/assets/img/510543_e2162f19aa7c42ae90809ed5eb752275-mv2.png.webp",
+    "detail": true
+  },
+  {
+    "title": "LEITE SILICONIZADO",
+    "path": "/infor-leite-siliconizado/",
+    "image": "/assets/img/510543_e83f902c265d43b38eeace7887699267-mv2.png.webp",
+    "detail": true
+  },
+  {
+    "title": "ÓLEO DE ROSA MOSQUETA",
+    "path": "/infor-óleo-rosa-mosqueta/",
+    "image": "/assets/img/510543_e9ffe56ee55340c49841d9f730ad944f-mv2.png.webp",
+    "detail": true
+  },
+  {
+    "title": "GELATINA CAPILAR",
+    "path": "/kit-capilar/",
+    "image": "/assets/img/510543_369510fc623446bd89f57c289f6b9346-mv2.jpeg.webp",
+    "detail": true
+  },
+  {
+    "title": "KIT CAPILAR 3 ITENS",
+    "path": "/kit-capilar-babbaloko-hair/",
+    "image": "/assets/img/510543_e5d977fa3cc4493f8db4c44a3777569d-mv2.jpeg.webp",
+    "detail": true
+  },
+  {
+    "title": "ÓLEO CAPILAR",
+    "path": "/kit-capilar-tutano-horse/",
+    "image": "/assets/img/510543_e351c2445bda4860951f056b295d4f39-mv2.jpeg.webp",
+    "detail": true
+  },
+  {
+    "title": "LOÇÕES HIDRATANTES 180G",
+    "path": "/loção-orquídea-180g/",
+    "image": "/assets/img/510543_ddf207f6dc72459e9715edc34c6bc31a-mv2.jpeg.webp",
+    "detail": true
+  },
+  {
+    "title": "LOÇÕES HIDRATANTES 190G",
+    "path": "/loções-hidratantes-190g/",
+    "image": "/assets/img/510543_8cc1319e860247bf91d42b534b2dc745-mv2.jpeg.webp",
+    "detail": true
+  },
+  {
+    "title": "ÓLEO DE MENTA",
+    "path": "/oleo-de-menta/",
+    "image": "/assets/img/510543_618a6dcf334f45f3bc1273d1af2bd1c5-mv2.png.webp",
+    "detail": true
+  },
+  {
+    "title": "PERFUME SENSUAL MASCULINO 40ML",
+    "path": "/perfume-de-calcinha-babbaloko-uva/",
+    "image": "/assets/img/510543_7c4de11dd0894ba980e867de67d6f825-mv2.jpeg.webp",
+    "detail": true
+  },
+  {
+    "title": "PERFUME DE ÍNTIMO",
+    "path": "/perfume-de-íntimo/",
+    "image": "/assets/img/510543_5c2666cdf13a4f4b968f14200575e286-mv2.jpeg.webp",
+    "detail": true
+  },
+  {
+    "title": "PERFUNE SENSUAL FEMENINO 40ML",
+    "path": "/perfume-morango-com-champagne/",
+    "image": "/assets/img/510543_59482f6c3719431093cd7ed4e8730aed-mv2.jpeg.webp",
+    "detail": true
+  },
+  {
+    "title": "POMADAS MASSAGEADORA 240G",
+    "path": "/pomada-naja-africana/",
+    "image": "/assets/img/510543_66b5b1f7da294d97a11a9937f73c6f3d-mv2.jpeg.webp",
+    "detail": true
+  },
+  {
+    "title": "PÉ MILAGROSO",
+    "path": "/pé-milagroso/",
+    "image": "/assets/img/510543_974de2124277402ca1b31e13ddece3d1-mv2.png.webp",
+    "detail": true
+  },
+  {
+    "title": "SABONETE ÍNTIMO 200ML",
+    "path": "/sab-uva/",
+    "image": "/assets/img/510543_91c453ca3a624b8280e2d068b37bc5f6-mv2.jpeg.webp",
+    "detail": true
+  },
+  {
+    "title": "SABONETE ÍNTIMO MASCULINO 200ML",
+    "path": "/sabonete-tutti-fruitt/",
+    "image": "/assets/img/510543_ba4da632b2a249838722c907c07d82dd-mv2.jpeg.webp",
+    "detail": true
+  },
+  {
+    "title": "POMADAS MASSAGEADORAS  150G",
+    "path": "/sportgelpremium/",
+    "image": "/assets/img/510543_bc85d8ebeddd4e5b8498a8360022dc67-mv2.jpeg.webp",
+    "detail": true
+  },
+  {
+    "title": "GEL MASSAGEADOR POTE  250G",
+    "path": "/tubarão/",
+    "image": "/assets/img/510543_3089b5ecc0ee40f99e0b2e0cd0516789-mv2.jpeg.webp",
+    "detail": true
+  },
+  {
+    "title": "OIL COLLECTION",
+    "path": "/óleo/",
+    "image": "/assets/img/510543_583377207e8a40cf85ffea0976b12957-mv2.jpeg.webp",
+    "detail": true
+  },
+  {
+    "title": "KIT CAPILAR 4 ITENS",
+    "path": "/óleo-capilar-babbaloko/",
+    "image": "/assets/img/510543_e1f542433b2e4ddeb402bd0bebf93ef5-mv2.png.webp",
+    "detail": true
+  },
+  {
+    "title": "PERFUME CAPILAR",
+    "path": "/óleo-capilar-tutano/",
+    "image": "/assets/img/510543_64118e66dc614234b10f2b0dcd39d6f8-mv2.jpeg.webp",
+    "detail": true
+  },
+  {
+    "title": "ÓLEO CORPORAL",
+    "path": "/óleo-corporal/",
+    "image": "/assets/img/510543_ceef602a9bf3449f8cb4b17971b0473c-mv2.jpeg.webp",
+    "detail": true
+  }
+]

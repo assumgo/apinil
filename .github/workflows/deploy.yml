@@ -1,0 +1,78 @@
+name: deploy
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Tag ou branch para publicar no servidor
+        required: true
+        default: v0.1.0
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Conferir conexão com o servidor
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          missing=0
+          for name in DEPLOY_HOST DEPLOY_USER DEPLOY_SSH_KEY; do
+            if [ -z "${!name}" ]; then
+              echo "Segredo ausente: $name"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "Cadastre os segredos em Settings → Secrets and variables → Actions."
+            echo "DEPLOY_HOST: IP ou domínio do servidor"
+            echo "DEPLOY_USER: usuário SSH com sudo sem senha"
+            echo "DEPLOY_SSH_KEY: chave privada autorizada em authorized_keys"
+            echo "DEPLOY_PORT é opcional e vale 22. A variável WEB_PORT vale 80."
+            exit 1
+          fi
+
+      - name: Publicar a versão
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          REF: ${{ github.event.release.tag_name || inputs.ref }}
+          WEB_PORT: ${{ vars.WEB_PORT || '80' }}
+        run: |
+          case "$REF" in
+            ''|*[!A-Za-z0-9._/-]*) echo "Ref inválida: $REF"; exit 1 ;;
+          esac
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "${DEPLOY_PORT:-22}" -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts
+          ssh -i ~/.ssh/deploy_key -p "${DEPLOY_PORT:-22}" -o StrictHostKeyChecking=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "sudo APP_DIR=/opt/apinil PORT='${WEB_PORT}' REF='${REF}' bash -s" <<'REMOTE'
+          set -euo pipefail
+          APP_DIR="${APP_DIR:-/opt/apinil}"
+          PORT="${PORT:-80}"
+          REF="${REF:?}"
+          REPO="https://github.com/assumgo/apinil.git"
+          if [ ! -d "$APP_DIR/.git" ]; then
+            git clone "$REPO" "$APP_DIR"
+          fi
+          cd "$APP_DIR"
+          git fetch origin --tags --prune
+          if git rev-parse --verify --quiet "refs/tags/$REF" >/dev/null; then
+            git checkout --force --detach "refs/tags/$REF"
+          elif git rev-parse --verify --quiet "refs/remotes/origin/$REF" >/dev/null; then
+            git checkout --force -B "$REF" "origin/$REF"
+          else
+            echo "Ref não encontrada no GitHub: $REF"
+            exit 1
+          fi
+          PORT="$PORT" docker compose up -d --build
+          docker compose ps
+          REMOTE
