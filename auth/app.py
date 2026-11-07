@@ -1016,7 +1016,7 @@ def usuarios_page(*, rows, q: str, aviso: str, erro: str, editor: dict | None, c
     popup = ""
     if aviso == "Usuário incluído com sucesso.":
         popup = f"""
-<dialog class="modal" open>
+<dialog class="modal" id="aviso-incluido">
   <h2>Usuário incluído</h2>
   <p>O usuário foi incluído com sucesso. No primeiro acesso, a troca da senha será obrigatória.</p>
   <form method="get" action="{esc(USUARIOS_PATH)}">
@@ -1024,6 +1024,7 @@ def usuarios_page(*, rows, q: str, aviso: str, erro: str, editor: dict | None, c
     <button type="submit">OK</button>
   </form>
 </dialog>
+<script>document.getElementById("aviso-incluido").showModal();</script>
 """
     editor_html = ""
     if editor:
@@ -1041,6 +1042,7 @@ def usuarios_page(*, rows, q: str, aviso: str, erro: str, editor: dict | None, c
   <form class="record-form" method="post" action="{esc(USUARIOS_PATH)}">
     <input type="hidden" name="acao" value="salvar">
     <input type="hidden" name="q" value="{esc(q)}">
+    <p class="readonly">ID gerado ao salvar</p>
     <label>Nome<input name="nome" maxlength="80" required value="{esc(editor["nome"])}" autofocus>{field_error("nome")}</label>
     <label>Login<input name="login" maxlength="40" required value="{esc(editor["login"])}" autocomplete="off">{field_error("login")}</label>
     <label>E-mail<input name="email" type="email" maxlength="120" required value="{esc(editor["email"])}" autocomplete="off">{field_error("email")}</label>

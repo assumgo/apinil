@@ -4,8 +4,9 @@ O número publicado no site fica em `VERSION` e em `public/version.txt`. Cada ve
 
 ## 0.7.0 — 2026-11-07
 
-- Cadastro de usuários com nome, login, e-mail único e senha.
-- O administrador inclui, edita, bloqueia, exclui, define outro administrador e pode pedir a troca de senha.
+- Cadastro de usuários com ID, nome, login, e-mail único e senha.
+- A inclusão bem-sucedida abre um aviso. Depois disso, só o nome e o login podem ser alterados.
+- O administrador bloqueia, exclui, define outro administrador e pode pedir a troca de senha.
 - No primeiro acesso, e quando o administrador pede, o usuário troca a senha antes de continuar.
 
 ## 0.6.3 — 2026-10-24
