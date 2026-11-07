@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import html
 import os
+import re
 import secrets
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -71,6 +72,10 @@ FORMAS_PAGAMENTO_INICIAIS = (
 )
 
 CONDICOES_PATH = "/restrito/cadastros/condicoes-de-pagamentos"
+USUARIOS_PATH = "/restrito/cadastros/usuarios"
+PASSWORD_PATH = "/restrito/trocar-senha"
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+LOGIN_RE = re.compile(r"^[A-Za-z0-9._-]{3,40}$")
 CONDICOES_PAGAMENTO_INICIAIS = (
     (1, 1, "AVISTA"),
     (2, 1, "10DD"),
@@ -367,6 +372,13 @@ table.grid tbody tr:has(input:checked) { background: #e7f5ec; }
 .col-nome { width: 110px; white-space: nowrap; }
 .col-esfera { width: 130px; }
 .grid-count { color: var(--muted); margin: 0 0 12px; }
+.checkline { display: flex; align-items: center; gap: 10px; }
+.checkline input { width: auto; padding: 0; accent-color: var(--green); }
+.readonly { margin: 0; color: var(--muted); }
+dialog.modal { border: 0; border-radius: 24px; padding: 28px; max-width: 440px; box-shadow: var(--shadow); }
+dialog.modal::backdrop { background: rgba(16, 32, 24, .45); }
+dialog.modal h2, dialog.modal p { text-align: left; }
+dialog.modal h2 { margin: 0 0 8px; }
 @media (max-width: 800px) {
   .restrito-shell { grid-template-columns: 1fr; }
 }
@@ -381,7 +393,7 @@ def login_form(error: str = "") -> bytes:
   <p>Entre com o usuário e a senha da fábrica.</p>
   {message}
   <form method="post" action="/restrito/login">
-    <label>Usuário<input name="username" autocomplete="username" required autofocus></label>
+    <label>Login<input name="username" autocomplete="username" required autofocus></label>
     <label>Senha<input name="password" type="password" autocomplete="current-password" required></label>
     <button type="submit">Entrar</button>
   </form>
@@ -403,7 +415,7 @@ def current_user(handler: BaseHTTPRequestHandler):
     with connect() as conn:
         row = conn.execute(
             """
-            SELECT u.id, u.username, u.display_name, u.role
+            SELECT u.id, u.username, u.display_name, u.role, u.must_change_password
             FROM app_session s
             JOIN app_user u ON u.id = s.user_id
             WHERE s.id = %s AND s.expires_at > now() AND u.active
@@ -412,7 +424,13 @@ def current_user(handler: BaseHTTPRequestHandler):
         ).fetchone()
     if not row:
         return None
-    return {"id": row[0], "username": row[1], "name": row[2], "role": row[3]}
+    return {
+        "id": row[0],
+        "username": row[1],
+        "name": row[2],
+        "role": row[3],
+        "must_change_password": bool(row[4]),
+    }
 
 
 def cards_for(items) -> str:
@@ -913,6 +931,308 @@ grade.querySelectorAll("tbody tr").forEach((row) => {{
     return page("Condições de Pagamentos", body, logged=True, current=CONDICOES_PATH, wide=True)
 
 
+def is_admin(user) -> bool:
+    return user.get("role") in ("master", "admin")
+
+
+def usuarios_url(**params: str) -> str:
+    clean = {key: value for key, value in params.items() if value}
+    if not clean:
+        return USUARIOS_PATH
+    return USUARIOS_PATH + "?" + urlencode(clean)
+
+
+def list_usuarios(conn, q: str):
+    if not q:
+        return conn.execute(
+            """
+            SELECT id, display_name, username, email, role, active, must_change_password
+            FROM app_user
+            ORDER BY id
+            """
+        ).fetchall()
+    pattern = like_pattern(q)
+    return conn.execute(
+        """
+        SELECT id, display_name, username, email, role, active, must_change_password
+        FROM app_user
+        WHERE display_name ILIKE %s ESCAPE '\\'
+           OR username ILIKE %s ESCAPE '\\'
+           OR coalesce(email, '') ILIKE %s ESCAPE '\\'
+        ORDER BY id
+        """,
+        (pattern, pattern, pattern),
+    ).fetchall()
+
+
+def get_usuario(conn, item_id: int):
+    return conn.execute(
+        """
+        SELECT id, display_name, username, email, role, active, must_change_password
+        FROM app_user
+        WHERE id = %s
+        """,
+        (item_id,),
+    ).fetchone()
+
+
+def keeps_an_admin(conn, item_id: int, *, active: bool, role: str) -> bool:
+    others = conn.execute(
+        """
+        SELECT count(*)
+        FROM app_user
+        WHERE id <> %s AND active AND role IN ('master', 'admin')
+        """,
+        (item_id,),
+    ).fetchone()[0]
+    still_admin = active and role in ("master", "admin")
+    return others + (1 if still_admin else 0) >= 1
+
+
+def validate_usuario(nome: str, login: str, email: str, senha: str, confirmar: str, *, creating: bool) -> dict[str, str]:
+    errors = {}
+    if not nome:
+        errors["nome"] = "Informe o nome."
+    elif len(nome) > 80:
+        errors["nome"] = "O nome pode ter no máximo 80 caracteres."
+    if not LOGIN_RE.fullmatch(login):
+        errors["login"] = "O login deve ter de 3 a 40 letras, números, ponto, hífen ou sublinhado."
+    if creating:
+        if not EMAIL_RE.fullmatch(email) or len(email) > 120:
+            errors["email"] = "Informe um e-mail válido."
+        if len(senha) < 8:
+            errors["senha"] = "A senha precisa ter pelo menos 8 caracteres."
+        elif senha != confirmar:
+            errors["confirmar"] = "A confirmação não confere com a senha."
+    return errors
+
+
+def usuarios_page(*, rows, q: str, aviso: str, erro: str, editor: dict | None, current_id: int) -> bytes:
+    flashes = ""
+    if aviso and aviso != "Usuário incluído com sucesso.":
+        flashes += f'<p class="flash">{esc(aviso)}</p>'
+    if erro:
+        flashes += f'<p class="flash error">{esc(erro)}</p>'
+    popup = ""
+    if aviso == "Usuário incluído com sucesso.":
+        popup = f"""
+<dialog class="modal" open>
+  <h2>Usuário incluído</h2>
+  <p>O usuário foi incluído com sucesso. No primeiro acesso, a troca da senha será obrigatória.</p>
+  <form method="get" action="{esc(USUARIOS_PATH)}">
+    <input type="hidden" name="q" value="{esc(q)}">
+    <button type="submit">OK</button>
+  </form>
+</dialog>
+"""
+    editor_html = ""
+    if editor:
+        field_errors = editor.get("errors") or {}
+
+        def field_error(key: str) -> str:
+            message = field_errors.get(key)
+            return f'<span class="error">{esc(message)}</span>' if message else ""
+
+        if editor["modo"] == "incluir":
+            checked = " checked" if editor.get("administrador") else ""
+            editor_html = f"""
+<section class="editor">
+  <h2>Incluir usuário</h2>
+  <form class="record-form" method="post" action="{esc(USUARIOS_PATH)}">
+    <input type="hidden" name="acao" value="salvar">
+    <input type="hidden" name="q" value="{esc(q)}">
+    <label>Nome<input name="nome" maxlength="80" required value="{esc(editor["nome"])}" autofocus>{field_error("nome")}</label>
+    <label>Login<input name="login" maxlength="40" required value="{esc(editor["login"])}" autocomplete="off">{field_error("login")}</label>
+    <label>E-mail<input name="email" type="email" maxlength="120" required value="{esc(editor["email"])}" autocomplete="off">{field_error("email")}</label>
+    <label>Senha<input name="senha" type="password" required autocomplete="new-password">{field_error("senha")}</label>
+    <label>Confirmar senha<input name="confirmar" type="password" required autocomplete="new-password">{field_error("confirmar")}</label>
+    <label class="checkline"><input type="checkbox" name="administrador" value="1"{checked}>Tornar administrador</label>
+    <p class="readonly">No primeiro acesso, o usuário será obrigado a trocar a senha.</p>
+    <div class="form-actions">
+      <button type="submit">Salvar</button>
+      <a class="btn" href="{esc(usuarios_url(q=q))}">Cancelar</a>
+    </div>
+  </form>
+</section>
+"""
+        else:
+            editor_html = f"""
+<section class="editor">
+  <h2>Editar usuário</h2>
+  <form class="record-form" method="post" action="{esc(USUARIOS_PATH)}">
+    <input type="hidden" name="acao" value="salvar">
+    <input type="hidden" name="id" value="{esc(editor["id"])}">
+    <input type="hidden" name="q" value="{esc(q)}">
+    <p class="readonly">ID {esc(editor["id"])}</p>
+    <label>Nome<input name="nome" maxlength="80" required value="{esc(editor["nome"])}" autofocus>{field_error("nome")}</label>
+    <label>Login<input name="login" maxlength="40" required value="{esc(editor["login"])}" autocomplete="off">{field_error("login")}</label>
+    <p class="readonly">E-mail {esc(editor["email"] or "—")}. O e-mail e a senha não podem ser alterados aqui.</p>
+    <div class="form-actions">
+      <button type="submit">Salvar</button>
+      <a class="btn" href="{esc(usuarios_url(q=q))}">Cancelar</a>
+    </div>
+  </form>
+</section>
+"""
+    body_rows = []
+    for item_id, nome, login, email, role, active, must_change in rows:
+        admin = role in ("master", "admin")
+        body_rows.append(
+            "<tr>"
+            f'<td class="col-id"><input type="radio" name="id" value="{item_id}"'
+            f' data-active="{1 if active else 0}" data-admin="{1 if admin else 0}"'
+            f' data-self="{1 if item_id == current_id else 0}"'
+            f' aria-label="Selecionar {esc(login)}"></td>'
+            f"<td>{item_id}</td>"
+            f"<td>{esc(nome)}</td>"
+            f"<td>{esc(login)}</td>"
+            f"<td>{esc(email or '—')}</td>"
+            f"<td>{'Sim' if admin else 'Não'}</td>"
+            f"<td>{'Ativo' if active else 'Bloqueado'}</td>"
+            f"<td>{'Pendente' if must_change else 'Não'}</td>"
+            "</tr>"
+        )
+    grid_body = "".join(body_rows) or '<tr><td colspan="8">Nenhum usuário encontrado.</td></tr>'
+    quantidade = len(rows)
+    legenda = "1 registro" if quantidade == 1 else f"{quantidade} registros"
+    body = f"""
+<h1>Usuários</h1>
+{flashes}
+{popup}
+<div class="crud-toolbar">
+  <form class="search-form" method="get" action="{esc(USUARIOS_PATH)}">
+    <input name="q" value="{esc(q)}" placeholder="Nome, login ou e-mail" aria-label="Pesquisar usuários">
+    <button type="submit">Pesquisar</button>
+  </form>
+  <div class="crud-actions">
+    <a class="btn" href="{esc(usuarios_url(acao="incluir", q=q))}">Inserir</a>
+    <button type="submit" class="ghost" form="grade-usuarios" name="acao" value="editar" id="editar-usuario">Editar</button>
+    <button type="submit" class="ghost" form="grade-usuarios" name="acao" value="bloquear" id="bloquear-usuario">Bloquear</button>
+    <button type="submit" class="danger" form="grade-usuarios" name="acao" value="excluir" id="excluir-usuario">Excluir</button>
+    <button type="submit" class="ghost" form="grade-usuarios" name="acao" value="administrador" id="admin-usuario">Tornar administrador</button>
+    <button type="submit" class="ghost" form="grade-usuarios" name="acao" value="senha" id="senha-usuario">Solicitar troca de senha</button>
+  </div>
+</div>
+{editor_html}
+<section class="grid-card">
+  <p class="grid-count">{esc(legenda)}</p>
+  <form id="grade-usuarios" method="post" action="{esc(USUARIOS_PATH)}">
+    <input type="hidden" name="q" value="{esc(q)}">
+    <div class="grid-wrap">
+      <table class="grid">
+        <thead>
+          <tr><th></th><th>ID</th><th>Nome</th><th>Login</th><th>E-mail</th><th>Administrador</th><th>Situação</th><th>Troca de senha</th></tr>
+        </thead>
+        <tbody>{grid_body}</tbody>
+      </table>
+    </div>
+  </form>
+</section>
+<script>
+const grade = document.getElementById("grade-usuarios");
+function usuarioSelecionado() {{
+  return grade.querySelector('input[name="id"]:checked');
+}}
+function atualizarAcoes() {{
+  const marcado = usuarioSelecionado();
+  const bloquear = document.getElementById("bloquear-usuario");
+  const admin = document.getElementById("admin-usuario");
+  if (!marcado) {{
+    bloquear.textContent = "Bloquear";
+    admin.textContent = "Tornar administrador";
+    return;
+  }}
+  bloquear.textContent = marcado.dataset.active === "1" ? "Bloquear" : "Desbloquear";
+  admin.textContent = marcado.dataset.admin === "1" ? "Remover administrador" : "Tornar administrador";
+}}
+grade.addEventListener("change", atualizarAcoes);
+document.getElementById("editar-usuario").addEventListener("click", (event) => {{
+  if (!usuarioSelecionado()) {{
+    event.preventDefault();
+    alert("Selecione um registro na grade.");
+  }}
+}});
+document.getElementById("bloquear-usuario").addEventListener("click", (event) => {{
+  const marcado = usuarioSelecionado();
+  if (!marcado) {{
+    event.preventDefault();
+    alert("Selecione um registro na grade.");
+    return;
+  }}
+  if (marcado.dataset.self === "1") {{
+    event.preventDefault();
+    alert("Você não pode bloquear o próprio usuário.");
+    return;
+  }}
+  const acao = marcado.dataset.active === "1" ? "Bloquear" : "Desbloquear";
+  if (!confirm(acao + " o usuário selecionado?")) event.preventDefault();
+}});
+document.getElementById("excluir-usuario").addEventListener("click", (event) => {{
+  const marcado = usuarioSelecionado();
+  if (!marcado) {{
+    event.preventDefault();
+    alert("Selecione um registro na grade.");
+    return;
+  }}
+  if (marcado.dataset.self === "1") {{
+    event.preventDefault();
+    alert("Você não pode excluir o próprio usuário.");
+    return;
+  }}
+  if (!confirm("Excluir o usuário selecionado?")) event.preventDefault();
+}});
+document.getElementById("admin-usuario").addEventListener("click", (event) => {{
+  if (!usuarioSelecionado()) {{
+    event.preventDefault();
+    alert("Selecione um registro na grade.");
+  }}
+}});
+document.getElementById("senha-usuario").addEventListener("click", (event) => {{
+  if (!usuarioSelecionado()) {{
+    event.preventDefault();
+    alert("Selecione um registro na grade.");
+    return;
+  }}
+  if (!confirm("Pedir para o usuário trocar a senha no próximo acesso?")) event.preventDefault();
+}});
+grade.querySelectorAll("tbody tr").forEach((row) => {{
+  row.addEventListener("click", (event) => {{
+    if (event.target.closest("input,a,button")) return;
+    const radio = row.querySelector('input[type="radio"]');
+    if (!radio) return;
+    radio.checked = true;
+    atualizarAcoes();
+  }});
+  row.addEventListener("dblclick", () => {{
+    const radio = row.querySelector('input[type="radio"]');
+    if (!radio) return;
+    radio.checked = true;
+    document.getElementById("editar-usuario").click();
+  }});
+}});
+</script>
+"""
+    return page("Usuários", body, logged=True, current=USUARIOS_PATH, wide=True)
+
+
+def password_form(error: str = "") -> bytes:
+    message = f'<p class="error">{esc(error)}</p>' if error else ""
+    body = f"""
+<section class="login-card">
+  <h1>Trocar senha</h1>
+  <p>Para continuar, informe a senha atual e escolha uma nova senha.</p>
+  {message}
+  <form method="post" action="{esc(PASSWORD_PATH)}">
+    <label>Senha atual<input name="atual" type="password" autocomplete="current-password" required autofocus></label>
+    <label>Nova senha<input name="nova" type="password" autocomplete="new-password" required></label>
+    <label>Confirmar nova senha<input name="confirmar" type="password" autocomplete="new-password" required></label>
+    <button type="submit">Salvar senha</button>
+  </form>
+</section>
+"""
+    return page("Trocar senha", body, logged=True, current=PASSWORD_PATH)
+
+
 def module_page(title: str, text: str, current: str) -> bytes:
     body = f"""
 <h1>{esc(title)}</h1>
@@ -962,11 +1282,23 @@ class Handler(BaseHTTPRequestHandler):
         if path in ("/restrito/login",):
             user = current_user(self)
             if user:
-                self.redirect("/restrito/cadastros")
+                self.redirect(PASSWORD_PATH if user["must_change_password"] else "/restrito/cadastros")
                 return
             self.send_html(200, login_form())
             return
         user = current_user(self)
+        if path == PASSWORD_PATH:
+            if not user:
+                self.redirect("/restrito/login")
+                return
+            if not user["must_change_password"]:
+                self.redirect("/restrito/cadastros")
+                return
+            self.send_html(200, password_form())
+            return
+        if user and user["must_change_password"]:
+            self.redirect(PASSWORD_PATH)
+            return
         if path == "/restrito":
             if not user:
                 self.redirect("/restrito/login")
@@ -997,6 +1329,15 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self.handle_condicoes_get()
             return
+        if path == USUARIOS_PATH:
+            if not user:
+                self.redirect("/restrito/login")
+                return
+            if not is_admin(user):
+                self.send_html(403, page("Usuários", "<h1>Usuários</h1><p>Somente um administrador pode cadastrar usuários.</p>", logged=True, current=USUARIOS_PATH))
+                return
+            self.handle_usuarios_get(user)
+            return
         pages = {href.rstrip("/"): (label, text) for href, label, text in CADASTROS + MODULES}
         if path in pages:
             if not user:
@@ -1018,6 +1359,17 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/restrito/sair":
             self.handle_logout()
             return
+        if path == PASSWORD_PATH:
+            user = current_user(self)
+            if not user:
+                self.redirect("/restrito/login")
+                return
+            self.handle_password_post(user, form)
+            return
+        user = current_user(self)
+        if user and user["must_change_password"]:
+            self.redirect(PASSWORD_PATH)
+            return
         if path == TIPOS_PATH:
             if not current_user(self):
                 self.redirect("/restrito/login")
@@ -1035,6 +1387,15 @@ class Handler(BaseHTTPRequestHandler):
                 self.redirect("/restrito/login")
                 return
             self.handle_condicoes_post(form)
+            return
+        if path == USUARIOS_PATH:
+            if not user:
+                self.redirect("/restrito/login")
+                return
+            if not is_admin(user):
+                self.send_html(403, page("Usuários", "<h1>Usuários</h1><p>Somente um administrador pode cadastrar usuários.</p>", logged=True, current=USUARIOS_PATH))
+                return
+            self.handle_usuarios_post(user, form)
             return
         self.send_html(404, page("Não encontrado", "<h1>Página não encontrada</h1>"))
 
@@ -1400,6 +1761,253 @@ class Handler(BaseHTTPRequestHandler):
             return
         self.redirect(condicoes_url(q=q, aviso=aviso))
 
+    def handle_usuarios_get(self, user) -> None:
+        params = self.query()
+        q = params.get("q", "").strip()[:80]
+        acao = params.get("acao", "")
+        aviso = {
+            "incluido": "Usuário incluído com sucesso.",
+            "alterado": "Usuário alterado.",
+            "bloqueado": "Usuário bloqueado.",
+            "desbloqueado": "Usuário desbloqueado.",
+            "excluido": "Usuário excluído.",
+            "admin": "Permissão de administrador atualizada.",
+            "senha": "O usuário deverá trocar a senha no próximo acesso.",
+        }.get(params.get("aviso", ""), "")
+        erro = {
+            "selecione": "Selecione um registro na grade.",
+            "ausente": "Registro não encontrado.",
+            "proprio": "Você não pode bloquear ou excluir o próprio usuário.",
+            "ultimo": "É preciso manter pelo menos um administrador ativo.",
+        }.get(params.get("erro", ""), "")
+        editor = None
+        with connect() as conn:
+            if acao == "incluir":
+                editor = {
+                    "modo": "incluir",
+                    "nome": "",
+                    "login": "",
+                    "email": "",
+                    "administrador": False,
+                    "errors": {},
+                }
+            elif acao == "editar":
+                item_id = parse_record_id(params.get("id", ""))
+                row = get_usuario(conn, item_id) if item_id else None
+                if row is None:
+                    erro = "Selecione um registro na grade."
+                else:
+                    editor = {
+                        "modo": "editar",
+                        "id": str(row[0]),
+                        "nome": row[1],
+                        "login": row[2],
+                        "email": row[3] or "",
+                        "errors": {},
+                    }
+            rows = list_usuarios(conn, q)
+        self.send_html(200, usuarios_page(rows=rows, q=q, aviso=aviso, erro=erro, editor=editor, current_id=user["id"]))
+
+    def handle_usuarios_post(self, user, form: dict[str, str]) -> None:
+        acao = form.get("acao", "")
+        q = form.get("q", "").strip()[:80]
+        if acao == "salvar":
+            self.save_usuario(user, form, q)
+            return
+        if acao == "editar":
+            item_id = parse_record_id(form.get("id", ""))
+            if item_id is None:
+                self.redirect(usuarios_url(q=q, erro="selecione"))
+                return
+            self.redirect(usuarios_url(acao="editar", id=str(item_id), q=q))
+            return
+        item_id = parse_record_id(form.get("id", ""))
+        if item_id is None:
+            self.redirect(usuarios_url(q=q, erro="selecione"))
+            return
+        if acao in ("bloquear", "excluir") and item_id == user["id"]:
+            self.redirect(usuarios_url(q=q, erro="proprio"))
+            return
+        with connect() as conn:
+            row = get_usuario(conn, item_id)
+            if row is None:
+                self.redirect(usuarios_url(q=q, erro="ausente"))
+                return
+            role, active = row[4], row[5]
+            if acao == "bloquear":
+                new_active = not active
+                if not keeps_an_admin(conn, item_id, active=new_active, role=role):
+                    self.redirect(usuarios_url(q=q, erro="ultimo"))
+                    return
+                conn.execute(
+                    "UPDATE app_user SET active = %s, updated_at = now() WHERE id = %s",
+                    (new_active, item_id),
+                )
+                if not new_active:
+                    conn.execute("DELETE FROM app_session WHERE user_id = %s", (item_id,))
+                aviso = "desbloqueado" if new_active else "bloqueado"
+            elif acao == "excluir":
+                if not keeps_an_admin(conn, item_id, active=False, role="user"):
+                    self.redirect(usuarios_url(q=q, erro="ultimo"))
+                    return
+                conn.execute("DELETE FROM app_user WHERE id = %s", (item_id,))
+                aviso = "excluido"
+            elif acao == "administrador":
+                new_role = "user" if role in ("master", "admin") else "admin"
+                if not keeps_an_admin(conn, item_id, active=active, role=new_role):
+                    self.redirect(usuarios_url(q=q, erro="ultimo"))
+                    return
+                conn.execute(
+                    "UPDATE app_user SET role = %s, updated_at = now() WHERE id = %s",
+                    (new_role, item_id),
+                )
+                aviso = "admin"
+            elif acao == "senha":
+                conn.execute(
+                    "UPDATE app_user SET must_change_password = true, updated_at = now() WHERE id = %s",
+                    (item_id,),
+                )
+                conn.commit()
+                if item_id == user["id"]:
+                    self.redirect(PASSWORD_PATH)
+                    return
+                aviso = "senha"
+            else:
+                self.redirect(USUARIOS_PATH)
+                return
+            conn.commit()
+        self.redirect(usuarios_url(q=q, aviso=aviso))
+
+    def save_usuario(self, user, form: dict[str, str], q: str) -> None:
+        item_id = parse_record_id(form.get("id", ""))
+        nome = " ".join(form.get("nome", "").split())
+        login = form.get("login", "").strip()
+        email = form.get("email", "").strip().lower()
+        senha = form.get("senha", "")
+        confirmar = form.get("confirmar", "")
+        creating = item_id is None
+        errors = validate_usuario(nome, login, email, senha, confirmar, creating=creating)
+        editor = {
+            "modo": "incluir" if creating else "editar",
+            "id": str(item_id or ""),
+            "nome": nome,
+            "login": login,
+            "email": email,
+            "administrador": form.get("administrador") == "1",
+            "errors": errors,
+        }
+        if not creating and not errors:
+            with connect() as conn:
+                found = get_usuario(conn, item_id)
+            if found is None:
+                self.redirect(usuarios_url(q=q, erro="ausente"))
+                return
+            editor["email"] = found[3] or ""
+        if errors:
+            with connect() as conn:
+                if not creating:
+                    found = get_usuario(conn, item_id)
+                    if found:
+                        editor["email"] = found[3] or ""
+                rows = list_usuarios(conn, q)
+            self.send_html(400, usuarios_page(rows=rows, q=q, aviso="", erro="", editor=editor, current_id=user["id"]))
+            return
+
+        def reject(field: str, message: str) -> None:
+            editor["errors"] = {field: message}
+            with connect() as conn:
+                rows = list_usuarios(conn, q)
+            self.send_html(400, usuarios_page(rows=rows, q=q, aviso="", erro="", editor=editor, current_id=user["id"]))
+
+        try:
+            with connect() as conn:
+                login_owner = conn.execute(
+                    """
+                    SELECT id FROM app_user
+                    WHERE lower(username) = lower(%s)
+                      AND (%s::bigint IS NULL OR id <> %s)
+                    """,
+                    (login, item_id, item_id),
+                ).fetchone()
+                if login_owner:
+                    conn.rollback()
+                    reject("login", "Já existe um usuário com este login.")
+                    return
+                if creating:
+                    email_owner = conn.execute(
+                        """
+                        SELECT id FROM app_user
+                        WHERE lower(email) = lower(%s)
+                        """,
+                        (email,),
+                    ).fetchone()
+                    if email_owner:
+                        conn.rollback()
+                        reject("email", "Já existe um usuário com este e-mail.")
+                        return
+                    conn.execute(
+                        """
+                        INSERT INTO app_user
+                            (username, password_hash, display_name, email, role, active, must_change_password)
+                        VALUES (%s, %s, %s, %s, %s, true, true)
+                        """,
+                        (
+                            login,
+                            hash_password(senha),
+                            nome,
+                            email,
+                            "admin" if editor["administrador"] else "user",
+                        ),
+                    )
+                    aviso = "incluido"
+                else:
+                    conn.execute(
+                        """
+                        UPDATE app_user
+                        SET display_name = %s, username = %s, updated_at = now()
+                        WHERE id = %s
+                        """,
+                        (nome, login, item_id),
+                    )
+                    aviso = "alterado"
+                conn.commit()
+        except psycopg.errors.UniqueViolation:
+            reject("login", "Já existe um usuário com este login ou este e-mail.")
+            return
+        self.redirect(usuarios_url(q=q, aviso=aviso))
+
+    def handle_password_post(self, user, form: dict[str, str]) -> None:
+        atual = form.get("atual", "")
+        nova = form.get("nova", "")
+        confirmar = form.get("confirmar", "")
+        if len(nova) < 8:
+            self.send_html(400, password_form("A senha precisa ter pelo menos 8 caracteres."))
+            return
+        if nova != confirmar:
+            self.send_html(400, password_form("A confirmação não confere com a senha."))
+            return
+        with connect() as conn:
+            row = conn.execute(
+                "SELECT password_hash FROM app_user WHERE id = %s AND active",
+                (user["id"],),
+            ).fetchone()
+            if not row or not verify_password(atual, row[0]):
+                self.send_html(401, password_form("A senha atual não confere."))
+                return
+            if verify_password(nova, row[0]):
+                self.send_html(400, password_form("Escolha uma senha diferente da atual."))
+                return
+            conn.execute(
+                """
+                UPDATE app_user
+                SET password_hash = %s, must_change_password = false, updated_at = now()
+                WHERE id = %s
+                """,
+                (hash_password(nova), user["id"]),
+            )
+            conn.commit()
+        self.redirect("/restrito/cadastros")
+
     def handle_login(self, username: str, password: str) -> None:
         username = username.strip()
         generic = "Usuário ou senha inválidos."
@@ -1409,15 +2017,19 @@ class Handler(BaseHTTPRequestHandler):
         with connect() as conn:
             row = conn.execute(
                 """
-                SELECT id, password_hash, active
+                SELECT id, password_hash, active, must_change_password
                 FROM app_user
-                WHERE username = %s
+                WHERE lower(username) = lower(%s)
                 """,
                 (username,),
             ).fetchone()
-            if not row or not row[2] or not verify_password(password, row[1]):
+            if not row or not verify_password(password, row[1]):
                 self.send_html(401, login_form(generic))
                 return
+            if not row[2]:
+                self.send_html(403, login_form("Usuário bloqueado. Procure o administrador."))
+                return
+            must_change = bool(row[3])
             token = secrets.token_urlsafe(32)
             expires = datetime.now(timezone.utc) + timedelta(hours=SESSION_HOURS)
             conn.execute("DELETE FROM app_session WHERE expires_at < now()")
@@ -1430,7 +2042,7 @@ class Handler(BaseHTTPRequestHandler):
             f"{SESSION_COOKIE}={token}; HttpOnly; SameSite=Lax; Path=/; "
             f"Max-Age={SESSION_HOURS * 3600}"
         )
-        self.redirect("/restrito/cadastros", cookie=cookie)
+        self.redirect(PASSWORD_PATH if must_change else "/restrito/cadastros", cookie=cookie)
 
     def handle_logout(self) -> None:
         token = ""

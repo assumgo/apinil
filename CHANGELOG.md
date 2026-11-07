@@ -2,6 +2,12 @@
 
 O número publicado no site fica em `VERSION` e em `public/version.txt`. Cada versão estável recebe uma tag `vX.Y.Z` e um release no GitHub.
 
+## 0.7.0 — 2026-11-07
+
+- Cadastro de usuários com nome, login, e-mail único e senha.
+- O administrador inclui, edita, bloqueia, exclui, define outro administrador e pode pedir a troca de senha.
+- No primeiro acesso, e quando o administrador pede, o usuário troca a senha antes de continuar.
+
 ## 0.6.3 — 2026-10-24
 
 - O menu Painel sai da área restrita. O cadeado e o login abrem Cadastros.
