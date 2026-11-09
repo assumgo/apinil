@@ -1,0 +1,10 @@
+[project]
+name = "apinil"
+version = "0.8.0"
+requires-python = ">=3.12"
+dependencies = [
+  "psycopg[binary]==3.2.10",
+]
+
+[tool.vercel]
+entrypoint = "auth.app:Handler"

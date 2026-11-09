@@ -1492,6 +1492,7 @@ class Handler(BaseHTTPRequestHandler):
             if static is not None:
                 self.send_static(static)
                 return
+        ensure_schema()
         if not database_url():
             self.send_html(503, page("Indisponível", "<h1>Área restrita indisponível</h1><p>O banco ainda não está configurado.</p>"))
             return
@@ -1590,6 +1591,7 @@ class Handler(BaseHTTPRequestHandler):
         if length < 0 or length > MAX_FORM_BYTES:
             self.send_html(413, page("Pedido grande", "<h1>Pedido grande demais</h1>"))
             return
+        ensure_schema()
         raw = self.rfile.read(length).decode("utf-8", "replace")
         form = {key: values[0] for key, values in parse_qs(raw).items()}
         if path == "/restrito/login":
@@ -2429,8 +2431,19 @@ class Handler(BaseHTTPRequestHandler):
         self.redirect("/restrito/login", cookie=cookie)
 
 
-def main() -> None:
+_schema_ready = False
+
+
+def ensure_schema() -> None:
+    global _schema_ready
+    if _schema_ready or not database_url():
+        return
     migrate_and_seed()
+    _schema_ready = True
+
+
+def main() -> None:
+    ensure_schema()
     bind = os.environ.get("BIND", "127.0.0.1")
     port = int(os.environ.get("PORT", "8090"))
     server = ThreadingHTTPServer((bind, port), Handler)
