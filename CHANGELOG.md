@@ -6,7 +6,7 @@ O número publicado no site fica em `VERSION` e em `public/version.txt`. Cada ve
 
 - O limite de login usa o endereço de quem acessa, e não o do proxy local.
 - Uma senha errada e um usuário inexistente levam o mesmo tempo de verificação.
-- O deploy só conecta se a chave do servidor já estiver gravada. O processo da área restrita escuta em loopback.
+- O deploy entra pela porta 2289 e só aceita a chave ed25519 gravada em `deploy/known_hosts`. O processo da área restrita escuta em loopback.
 - A área restrita não carrega mais fontes da Google.
 
 ## 0.8.1 — 2026-11-09

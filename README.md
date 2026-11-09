@@ -40,15 +40,14 @@ A imagem nginx serve a pasta `public/`. O healthcheck usa `GET /healthz`. A vers
 
 ## Conectar o servidor
 
-Não há, nesta conta, um servidor com SSH nem um worker do Cursor ligado. O workflow `deploy` fica pronto e só publica quando estes segredos existirem em Settings → Secrets and variables → Actions:
+O SSH do servidor responde em `104.161.32.245` na porta 2289. A chave ed25519 desse servidor está em `deploy/known_hosts`. O workflow `deploy` publica quando estes segredos existirem em Settings → Secrets and variables → Actions:
 
 | Segredo | Conteúdo |
 | --- | --- |
-| `DEPLOY_HOST` | IP ou domínio do servidor |
 | `DEPLOY_USER` | usuário SSH com sudo sem senha |
 | `DEPLOY_SSH_KEY` | chave privada correspondente ao `authorized_keys` |
-| `DEPLOY_HOST_KEY` | linha de `known_hosts` do servidor, conferida fora do workflow |
-| `DEPLOY_PORT` | porta SSH, se não for 22 |
+| `DEPLOY_HOST` | IP ou domínio, se não for 104.161.32.245 |
+| `DEPLOY_PORT` | porta SSH, se não for 2289 |
 
 A variável `WEB_PORT` (opcional) é a porta pública do site. O padrão é 80.
 
