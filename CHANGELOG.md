@@ -6,6 +6,7 @@ O número publicado no site fica em `VERSION` e em `public/version.txt`. Cada ve
 
 - Centros de Custo ganha formulário com ID, código reduzido, nome e descrição.
 - Inserir, editar e excluir. O ID é gerado pelo sistema e não pode ser alterado. O código reduzido é único.
+- O processo da área restrita também serve o site público quando a pasta `public` está disponível.
 
 ## 0.7.0 — 2026-11-07
 

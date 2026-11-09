@@ -11,6 +11,7 @@ import re
 import secrets
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlparse
 
 import psycopg
@@ -18,6 +19,25 @@ import psycopg
 SESSION_COOKIE = "apinil_session"
 SESSION_HOURS = 12
 PBKDF2_ROUNDS = 600_000
+MAX_FORM_BYTES = 64 * 1024
+PUBLIC_DIR = Path(__file__).resolve().parent.parent / "public"
+STATIC_TYPES = {
+    ".css": "text/css; charset=utf-8",
+    ".html": "text/html; charset=utf-8",
+    ".js": "text/javascript; charset=utf-8",
+    ".json": "application/json",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".svg": "image/svg+xml",
+    ".txt": "text/plain; charset=utf-8",
+    ".xml": "application/xml",
+    ".ico": "image/x-icon",
+    ".pdf": "application/pdf",
+    ".woff": "font/woff",
+    ".woff2": "font/woff2",
+}
 
 CADASTROS = (
     ("/restrito/cadastros/pessoas", "Pessoas", "Clientes, fornecedores e demais pessoas da fábrica."),
@@ -100,6 +120,27 @@ CONDICOES_PAGAMENTO_INICIAIS = (
 
 def database_url() -> str:
     return os.environ.get("DATABASE_URL", "").strip()
+
+
+def public_file(url_path: str) -> Path | None:
+    if url_path.startswith("/restrito") or not PUBLIC_DIR.is_dir():
+        return None
+    relative = url_path.lstrip("/") or "index.html"
+    root = PUBLIC_DIR.resolve()
+    candidate = (root / relative).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        return None
+    if candidate.is_dir():
+        candidate = (candidate / "index.html").resolve()
+        try:
+            candidate.relative_to(root)
+        except ValueError:
+            return None
+    if candidate.is_file():
+        return candidate
+    return None
 
 
 def connect():
@@ -1446,6 +1487,11 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+        if not path.startswith("/restrito"):
+            static = public_file(path)
+            if static is not None:
+                self.send_static(static)
+                return
         if not database_url():
             self.send_html(503, page("Indisponível", "<h1>Área restrita indisponível</h1><p>O banco ainda não está configurado.</p>"))
             return
@@ -1524,9 +1570,26 @@ class Handler(BaseHTTPRequestHandler):
             return
         self.send_html(404, page("Não encontrado", "<h1>Página não encontrada</h1>"))
 
+    def send_static(self, file_path: Path) -> None:
+        body = file_path.read_bytes()
+        content_type = STATIC_TYPES.get(file_path.suffix.lower(), "application/octet-stream")
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Cache-Control", "public, max-age=300")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_POST(self) -> None:
         path = urlparse(self.path).path.rstrip("/")
-        length = int(self.headers.get("Content-Length", "0") or 0)
+        try:
+            length = int(self.headers.get("Content-Length", "0") or 0)
+        except ValueError:
+            length = -1
+        if length < 0 or length > MAX_FORM_BYTES:
+            self.send_html(413, page("Pedido grande", "<h1>Pedido grande demais</h1>"))
+            return
         raw = self.rfile.read(length).decode("utf-8", "replace")
         form = {key: values[0] for key, values in parse_qs(raw).items()}
         if path == "/restrito/login":
