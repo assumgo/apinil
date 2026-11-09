@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import html
+import ipaddress
 import os
 import re
 import secrets
@@ -215,11 +216,52 @@ def request_is_local(handler: BaseHTTPRequestHandler) -> bool:
     return name in {"localhost", "127.0.0.1", "::1"}
 
 
+_TRUSTED_PROXIES = (
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("fc00::/7"),
+)
+_dummy_password_hash = ""
+
+
+def parse_ip(value: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    try:
+        return ipaddress.ip_address(value.strip())
+    except ValueError:
+        return None
+
+
+def is_trusted_proxy(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    return any(ip in network for network in _TRUSTED_PROXIES)
+
+
+def dummy_password_hash() -> str:
+    global _dummy_password_hash
+    if not _dummy_password_hash:
+        _dummy_password_hash = hash_password("not-a-real-password")
+    return _dummy_password_hash
+
+
 def client_ip(handler: BaseHTTPRequestHandler) -> str:
     address = getattr(handler, "client_address", None)
-    if not address:
-        return "desconhecido"
-    return str(address[0] or "desconhecido")[:80]
+    peer_text = str(address[0] or "") if address else ""
+    peer = parse_ip(peer_text)
+    if peer is None or not is_trusted_proxy(peer):
+        return (peer_text or "desconhecido")[:80]
+    forwarded = handler.headers.get("X-Forwarded-For", "")
+    parts = [part.strip() for part in forwarded.split(",") if part.strip()]
+    for part in reversed(parts):
+        ip = parse_ip(part)
+        if ip is not None and not is_trusted_proxy(ip):
+            return str(ip)[:80]
+    if parts:
+        ip = parse_ip(parts[-1])
+        if ip is not None:
+            return str(ip)[:80]
+    return str(peer)[:80]
 
 
 def throttle_blocked(conn, buckets: list[tuple[str, int]]) -> bool:
@@ -436,9 +478,6 @@ def page(title: str, body: str, *, logged: bool = False, current: str = "", wide
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{esc(title)} | Apinil</title>
   <link rel="icon" href="/assets/img/logo.png">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600;700&family=Outfit:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/assets/css/site.css">
   <link rel="stylesheet" href="/restrito/app.css">
 </head>
@@ -2538,7 +2577,9 @@ class Handler(BaseHTTPRequestHandler):
                 """,
                 (username,),
             ).fetchone()
-            if not row or not verify_password(password, row[1]):
+            stored = row[1] if row else dummy_password_hash()
+            password_ok = verify_password(password, stored)
+            if not row or not password_ok:
                 throttle_record(conn, [bucket for bucket, _limit in buckets])
                 conn.commit()
                 self.send_html(401, login_form(generic))

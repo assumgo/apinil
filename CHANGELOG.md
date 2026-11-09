@@ -2,6 +2,13 @@
 
 O número publicado no site fica em `VERSION` e em `public/version.txt`. Cada versão estável recebe uma tag `vX.Y.Z` e um release no GitHub.
 
+## 0.8.2 — 2026-11-09
+
+- O limite de login usa o endereço de quem acessa, e não o do proxy local.
+- Uma senha errada e um usuário inexistente levam o mesmo tempo de verificação.
+- O deploy só conecta se a chave do servidor já estiver gravada. O processo da área restrita escuta em loopback.
+- A área restrita não carrega mais fontes da Google.
+
 ## 0.8.1 — 2026-11-09
 
 - O acesso ao servidor passa a ser só por HTTPS, com redirecionamento e HSTS.

@@ -19,9 +19,10 @@ jobs:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST_KEY: ${{ secrets.DEPLOY_HOST_KEY }}
         run: |
           missing=0
-          for name in DEPLOY_HOST DEPLOY_USER DEPLOY_SSH_KEY; do
+          for name in DEPLOY_HOST DEPLOY_USER DEPLOY_SSH_KEY DEPLOY_HOST_KEY; do
             if [ -z "${!name}" ]; then
               echo "Segredo ausente: $name"
               missing=1
@@ -32,6 +33,7 @@ jobs:
             echo "DEPLOY_HOST: IP ou domínio do servidor"
             echo "DEPLOY_USER: usuário SSH com sudo sem senha"
             echo "DEPLOY_SSH_KEY: chave privada autorizada em authorized_keys"
+            echo "DEPLOY_HOST_KEY: linha known_hosts do servidor, gravada fora do workflow"
             echo "DEPLOY_PORT é opcional e vale 22. A variável WEB_PORT vale 80."
             exit 1
           fi
@@ -41,6 +43,7 @@ jobs:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST_KEY: ${{ secrets.DEPLOY_HOST_KEY }}
           DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
           REF: ${{ github.event.release.tag_name || inputs.ref }}
           WEB_PORT: ${{ vars.WEB_PORT || '80' }}
@@ -51,7 +54,8 @@ jobs:
           install -m 700 -d ~/.ssh
           printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -p "${DEPLOY_PORT:-22}" -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts
+          printf '%s\n' "$DEPLOY_HOST_KEY" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
           ssh -i ~/.ssh/deploy_key -p "${DEPLOY_PORT:-22}" -o StrictHostKeyChecking=yes \
             "$DEPLOY_USER@$DEPLOY_HOST" \
             "sudo APP_DIR=/opt/apinil PORT='${WEB_PORT}' REF='${REF}' bash -s" <<'REMOTE'

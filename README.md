@@ -47,6 +47,7 @@ Não há, nesta conta, um servidor com SSH nem um worker do Cursor ligado. O wor
 | `DEPLOY_HOST` | IP ou domínio do servidor |
 | `DEPLOY_USER` | usuário SSH com sudo sem senha |
 | `DEPLOY_SSH_KEY` | chave privada correspondente ao `authorized_keys` |
+| `DEPLOY_HOST_KEY` | linha de `known_hosts` do servidor, conferida fora do workflow |
 | `DEPLOY_PORT` | porta SSH, se não for 22 |
 
 A variável `WEB_PORT` (opcional) é a porta pública do site. O padrão é 80.
