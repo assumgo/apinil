@@ -9,6 +9,7 @@ import html
 import os
 import re
 import secrets
+import threading
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -20,6 +21,13 @@ SESSION_COOKIE = "apinil_session"
 SESSION_HOURS = 12
 PBKDF2_ROUNDS = 600_000
 MAX_FORM_BYTES = 64 * 1024
+MAX_WORKERS = 8
+REQUEST_TIMEOUT = 20
+THROTTLE_WINDOW = timedelta(minutes=15)
+LOGIN_PAIR_LIMIT = 5
+LOGIN_USER_LIMIT = 10
+LOGIN_IP_LIMIT = 30
+PASSWORD_LIMIT = 5
 PUBLIC_DIR = Path(__file__).resolve().parent.parent / "public"
 STATIC_TYPES = {
     ".css": "text/css; charset=utf-8",
@@ -164,6 +172,105 @@ def verify_password(password: str, stored: str) -> bool:
         "sha256", password.encode(), bytes.fromhex(salt_hex), int(rounds)
     )
     return hmac.compare_digest(digest.hex(), digest_hex)
+
+
+def session_id(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def session_cookie(token: str, *, secure: bool, clear: bool = False) -> str:
+    value = "" if clear else token
+    age = 0 if clear else SESSION_HOURS * 3600
+    parts = [
+        f"{SESSION_COOKIE}={value}",
+        "HttpOnly",
+        "SameSite=Lax",
+        "Path=/",
+        f"Max-Age={age}",
+    ]
+    if secure:
+        parts.append("Secure")
+    return "; ".join(parts)
+
+
+def security_headers(host: str) -> list[tuple[str, str]]:
+    headers = [
+        ("X-Content-Type-Options", "nosniff"),
+        ("X-Frame-Options", "DENY"),
+        ("Content-Security-Policy", "frame-ancestors 'none'"),
+        ("Referrer-Policy", "same-origin"),
+    ]
+    name = host.split(":")[0].strip("[]").lower()
+    if name not in {"localhost", "127.0.0.1", "::1"}:
+        headers.append(("Strict-Transport-Security", "max-age=31536000"))
+    return headers
+
+
+def request_host(handler: BaseHTTPRequestHandler) -> str:
+    return (handler.headers.get("Host") or "").strip()
+
+
+def request_is_local(handler: BaseHTTPRequestHandler) -> bool:
+    name = request_host(handler).split(":")[0].strip("[]").lower()
+    return name in {"localhost", "127.0.0.1", "::1"}
+
+
+def client_ip(handler: BaseHTTPRequestHandler) -> str:
+    address = getattr(handler, "client_address", None)
+    if not address:
+        return "desconhecido"
+    return str(address[0] or "desconhecido")[:80]
+
+
+def throttle_blocked(conn, buckets: list[tuple[str, int]]) -> bool:
+    cutoff = datetime.now(timezone.utc) - THROTTLE_WINDOW
+    for bucket, limit in buckets:
+        row = conn.execute(
+            """
+            SELECT failures FROM auth_throttle
+            WHERE bucket = %s AND window_start >= %s
+            """,
+            (bucket, cutoff),
+        ).fetchone()
+        if row and row[0] >= limit:
+            return True
+    return False
+
+
+def throttle_record(conn, buckets: list[str]) -> None:
+    cutoff = datetime.now(timezone.utc) - THROTTLE_WINDOW
+    now = datetime.now(timezone.utc)
+    for bucket in buckets:
+        conn.execute(
+            """
+            INSERT INTO auth_throttle (bucket, failures, window_start)
+            VALUES (%s, 1, %s)
+            ON CONFLICT (bucket) DO UPDATE
+            SET failures = CASE
+                    WHEN auth_throttle.window_start < %s THEN 1
+                    ELSE auth_throttle.failures + 1
+                END,
+                window_start = CASE
+                    WHEN auth_throttle.window_start < %s THEN %s
+                    ELSE auth_throttle.window_start
+                END
+            """,
+            (bucket, now, cutoff, cutoff, now),
+        )
+
+
+def throttle_clear(conn, buckets: list[str]) -> None:
+    if buckets:
+        conn.execute("DELETE FROM auth_throttle WHERE bucket = ANY(%s)", (buckets,))
+
+
+def login_buckets(ip: str, username: str) -> list[tuple[str, int]]:
+    user = username.lower()[:80]
+    return [
+        (f"login-pair:{ip}:{user}", LOGIN_PAIR_LIMIT),
+        (f"login-user:{user}", LOGIN_USER_LIMIT),
+        (f"login-ip:{ip}", LOGIN_IP_LIMIT),
+    ]
 
 
 def migrate_and_seed() -> None:
@@ -468,7 +575,7 @@ def current_user(handler: BaseHTTPRequestHandler):
             JOIN app_user u ON u.id = s.user_id
             WHERE s.id = %s AND s.expires_at > now() AND u.active
             """,
-            (token,),
+            (session_id(token),),
         ).fetchone()
     if not row:
         return None
@@ -1454,14 +1561,25 @@ def module_page(title: str, text: str, current: str) -> bytes:
 
 
 class Handler(BaseHTTPRequestHandler):
+    timeout = REQUEST_TIMEOUT
+    server_version = "Apinil"
+    sys_version = ""
+
+    def version_string(self) -> str:
+        return "Apinil"
+
     def log_message(self, fmt: str, *args) -> None:
         print(fmt % args)
+
+    def add_security_headers(self) -> None:
+        for key, value in security_headers(request_host(self)):
+            self.send_header(key, value)
 
     def send_html(self, status: int, payload: bytes, *, headers: list[tuple[str, str]] | None = None) -> None:
         self.send_response(status)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
-        self.send_header("X-Content-Type-Options", "nosniff")
+        self.add_security_headers()
         for key, value in headers or []:
             self.send_header(key, value)
         self.send_header("Content-Length", str(len(payload)))
@@ -1472,6 +1590,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(303)
         self.send_header("Location", location)
         self.send_header("Cache-Control", "no-store")
+        self.add_security_headers()
         if cookie is not None:
             self.send_header("Set-Cookie", cookie)
         self.end_headers()
@@ -1483,6 +1602,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "text/css; charset=utf-8")
             self.send_header("Cache-Control", "no-store")
+            self.add_security_headers()
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -1576,8 +1696,8 @@ class Handler(BaseHTTPRequestHandler):
         content_type = STATIC_TYPES.get(file_path.suffix.lower(), "application/octet-stream")
         self.send_response(200)
         self.send_header("Content-Type", content_type)
-        self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Cache-Control", "public, max-age=300")
+        self.add_security_headers()
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -2359,12 +2479,18 @@ class Handler(BaseHTTPRequestHandler):
         if nova != confirmar:
             self.send_html(400, password_form("A confirmação não confere com a senha."))
             return
+        bucket = f"password:{user['id']}"
         with connect() as conn:
+            if throttle_blocked(conn, [(bucket, PASSWORD_LIMIT)]):
+                self.send_html(429, password_form("Muitas tentativas. Espere alguns minutos e tente de novo."))
+                return
             row = conn.execute(
                 "SELECT password_hash FROM app_user WHERE id = %s AND active",
                 (user["id"],),
             ).fetchone()
             if not row or not verify_password(atual, row[0]):
+                throttle_record(conn, [bucket])
+                conn.commit()
                 self.send_html(401, password_form("A senha atual não confere."))
                 return
             if verify_password(nova, row[0]):
@@ -2378,16 +2504,32 @@ class Handler(BaseHTTPRequestHandler):
                 """,
                 (hash_password(nova), user["id"]),
             )
+            conn.execute("DELETE FROM app_session WHERE user_id = %s", (user["id"],))
+            throttle_clear(conn, [bucket])
+            token = secrets.token_urlsafe(32)
+            expires = datetime.now(timezone.utc) + timedelta(hours=SESSION_HOURS)
+            conn.execute(
+                "INSERT INTO app_session (id, user_id, expires_at) VALUES (%s, %s, %s)",
+                (session_id(token), user["id"], expires),
+            )
             conn.commit()
-        self.redirect("/restrito/cadastros")
+        self.redirect(
+            "/restrito/cadastros",
+            cookie=session_cookie(token, secure=not request_is_local(self)),
+        )
 
     def handle_login(self, username: str, password: str) -> None:
-        username = username.strip()
+        username = username.strip()[:80]
         generic = "Usuário ou senha inválidos."
+        limited = "Muitas tentativas. Espere alguns minutos e tente de novo."
         if not database_url():
             self.send_html(503, login_form("O banco ainda não está configurado."))
             return
+        buckets = login_buckets(client_ip(self), username)
         with connect() as conn:
+            if throttle_blocked(conn, buckets):
+                self.send_html(429, login_form(limited))
+                return
             row = conn.execute(
                 """
                 SELECT id, password_hash, active, must_change_password
@@ -2397,9 +2539,13 @@ class Handler(BaseHTTPRequestHandler):
                 (username,),
             ).fetchone()
             if not row or not verify_password(password, row[1]):
+                throttle_record(conn, [bucket for bucket, _limit in buckets])
+                conn.commit()
                 self.send_html(401, login_form(generic))
                 return
             if not row[2]:
+                throttle_record(conn, [bucket for bucket, _limit in buckets])
+                conn.commit()
                 self.send_html(403, login_form("Usuário bloqueado. Procure o administrador."))
                 return
             must_change = bool(row[3])
@@ -2408,14 +2554,14 @@ class Handler(BaseHTTPRequestHandler):
             conn.execute("DELETE FROM app_session WHERE expires_at < now()")
             conn.execute(
                 "INSERT INTO app_session (id, user_id, expires_at) VALUES (%s, %s, %s)",
-                (token, row[0], expires),
+                (session_id(token), row[0], expires),
             )
+            throttle_clear(conn, [bucket for bucket, _limit in buckets[:2]])
             conn.commit()
-        cookie = (
-            f"{SESSION_COOKIE}={token}; HttpOnly; SameSite=Lax; Path=/; "
-            f"Max-Age={SESSION_HOURS * 3600}"
+        self.redirect(
+            PASSWORD_PATH if must_change else "/restrito/cadastros",
+            cookie=session_cookie(token, secure=not request_is_local(self)),
         )
-        self.redirect(PASSWORD_PATH if must_change else "/restrito/cadastros", cookie=cookie)
 
     def handle_logout(self) -> None:
         token = ""
@@ -2425,10 +2571,12 @@ class Handler(BaseHTTPRequestHandler):
                 token = value
         if token and database_url():
             with connect() as conn:
-                conn.execute("DELETE FROM app_session WHERE id = %s", (token,))
+                conn.execute("DELETE FROM app_session WHERE id = %s", (session_id(token),))
                 conn.commit()
-        cookie = f"{SESSION_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0"
-        self.redirect("/restrito/login", cookie=cookie)
+        self.redirect(
+            "/restrito/login",
+            cookie=session_cookie("", secure=not request_is_local(self), clear=True),
+        )
 
 
 _schema_ready = False
@@ -2442,11 +2590,52 @@ def ensure_schema() -> None:
     _schema_ready = True
 
 
+class BoundedHTTPServer(ThreadingHTTPServer):
+    daemon_threads = True
+    request_timeout = REQUEST_TIMEOUT
+
+    def __init__(self, server_address, handler):
+        super().__init__(server_address, handler)
+        self._slots = threading.BoundedSemaphore(MAX_WORKERS)
+
+    def process_request(self, request, client_address):
+        if not self._slots.acquire(blocking=False):
+            try:
+                request.settimeout(2)
+                request.sendall(
+                    b"HTTP/1.1 503 Service Unavailable\r\n"
+                    b"Connection: close\r\n"
+                    b"Retry-After: 1\r\n"
+                    b"Content-Length: 0\r\n\r\n"
+                )
+            except OSError:
+                pass
+            request.close()
+            return
+        try:
+            request.settimeout(self.request_timeout)
+        except OSError:
+            self._slots.release()
+            request.close()
+            return
+        try:
+            super().process_request(request, client_address)
+        except Exception:
+            self._slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._slots.release()
+
+
 def main() -> None:
     ensure_schema()
     bind = os.environ.get("BIND", "127.0.0.1")
     port = int(os.environ.get("PORT", "8090"))
-    server = ThreadingHTTPServer((bind, port), Handler)
+    server = BoundedHTTPServer((bind, port), Handler)
     print(f"área restrita em http://{bind}:{port}/restrito/")
     server.serve_forever()
 

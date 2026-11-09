@@ -19,6 +19,14 @@ CREATE TABLE IF NOT EXISTS app_session (
 CREATE INDEX IF NOT EXISTS app_session_user_idx ON app_session (user_id);
 CREATE INDEX IF NOT EXISTS app_session_expires_idx ON app_session (expires_at);
 
+CREATE TABLE IF NOT EXISTS auth_throttle (
+    bucket text PRIMARY KEY,
+    failures integer NOT NULL,
+    window_start timestamptz NOT NULL
+);
+
+DELETE FROM app_session WHERE length(id) <> 64 OR id !~ '^[0-9a-f]{64}$';
+
 CREATE TABLE IF NOT EXISTS tipo_documento (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     nome text NOT NULL,

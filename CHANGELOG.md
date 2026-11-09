@@ -2,6 +2,12 @@
 
 O número publicado no site fica em `VERSION` e em `public/version.txt`. Cada versão estável recebe uma tag `vX.Y.Z` e um release no GitHub.
 
+## 0.8.1 — 2026-11-09
+
+- O acesso ao servidor passa a ser só por HTTPS, com redirecionamento e HSTS.
+- Login e troca de senha travam depois de várias tentativas, e o servidor limita requisições simultâneas.
+- As páginas não podem ser embutidas em outro site. A sessão guarda só o resumo do token e a troca de senha encerra as sessões anteriores.
+
 ## 0.8.0 — 2026-11-07
 
 - Centros de Custo ganha formulário com ID, código reduzido, nome e descrição.
