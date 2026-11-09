@@ -6,11 +6,14 @@ from __future__ import annotations
 import hashlib
 import hmac
 import html
+import ipaddress
 import os
 import re
 import secrets
+import threading
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlparse
 
 import psycopg
@@ -18,6 +21,32 @@ import psycopg
 SESSION_COOKIE = "apinil_session"
 SESSION_HOURS = 12
 PBKDF2_ROUNDS = 600_000
+MAX_FORM_BYTES = 64 * 1024
+MAX_WORKERS = 8
+REQUEST_TIMEOUT = 20
+THROTTLE_WINDOW = timedelta(minutes=15)
+LOGIN_PAIR_LIMIT = 5
+LOGIN_USER_LIMIT = 10
+LOGIN_IP_LIMIT = 30
+PASSWORD_LIMIT = 5
+PUBLIC_DIR = Path(__file__).resolve().parent.parent / "public"
+STATIC_TYPES = {
+    ".css": "text/css; charset=utf-8",
+    ".html": "text/html; charset=utf-8",
+    ".js": "text/javascript; charset=utf-8",
+    ".json": "application/json",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".svg": "image/svg+xml",
+    ".txt": "text/plain; charset=utf-8",
+    ".xml": "application/xml",
+    ".ico": "image/x-icon",
+    ".pdf": "application/pdf",
+    ".woff": "font/woff",
+    ".woff2": "font/woff2",
+}
 
 CADASTROS = (
     ("/restrito/cadastros/pessoas", "Pessoas", "Clientes, fornecedores e demais pessoas da fábrica."),
@@ -72,10 +101,12 @@ FORMAS_PAGAMENTO_INICIAIS = (
 )
 
 CONDICOES_PATH = "/restrito/cadastros/condicoes-de-pagamentos"
+CENTROS_PATH = "/restrito/cadastros/centros-de-custo"
 USUARIOS_PATH = "/restrito/cadastros/usuarios"
 PASSWORD_PATH = "/restrito/trocar-senha"
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 LOGIN_RE = re.compile(r"^[A-Za-z0-9._-]{3,40}$")
+CODIGO_REDUZIDO_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9./-]{0,19}$")
 CONDICOES_PAGAMENTO_INICIAIS = (
     (1, 1, "AVISTA"),
     (2, 1, "10DD"),
@@ -100,6 +131,27 @@ def database_url() -> str:
     return os.environ.get("DATABASE_URL", "").strip()
 
 
+def public_file(url_path: str) -> Path | None:
+    if url_path.startswith("/restrito") or not PUBLIC_DIR.is_dir():
+        return None
+    relative = url_path.lstrip("/") or "index.html"
+    root = PUBLIC_DIR.resolve()
+    candidate = (root / relative).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        return None
+    if candidate.is_dir():
+        candidate = (candidate / "index.html").resolve()
+        try:
+            candidate.relative_to(root)
+        except ValueError:
+            return None
+    if candidate.is_file():
+        return candidate
+    return None
+
+
 def connect():
     return psycopg.connect(database_url())
 
@@ -121,6 +173,146 @@ def verify_password(password: str, stored: str) -> bool:
         "sha256", password.encode(), bytes.fromhex(salt_hex), int(rounds)
     )
     return hmac.compare_digest(digest.hex(), digest_hex)
+
+
+def session_id(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def session_cookie(token: str, *, secure: bool, clear: bool = False) -> str:
+    value = "" if clear else token
+    age = 0 if clear else SESSION_HOURS * 3600
+    parts = [
+        f"{SESSION_COOKIE}={value}",
+        "HttpOnly",
+        "SameSite=Lax",
+        "Path=/",
+        f"Max-Age={age}",
+    ]
+    if secure:
+        parts.append("Secure")
+    return "; ".join(parts)
+
+
+def security_headers(host: str) -> list[tuple[str, str]]:
+    headers = [
+        ("X-Content-Type-Options", "nosniff"),
+        ("X-Frame-Options", "DENY"),
+        ("Content-Security-Policy", "frame-ancestors 'none'"),
+        ("Referrer-Policy", "same-origin"),
+    ]
+    name = host.split(":")[0].strip("[]").lower()
+    if name not in {"localhost", "127.0.0.1", "::1"}:
+        headers.append(("Strict-Transport-Security", "max-age=31536000"))
+    return headers
+
+
+def request_host(handler: BaseHTTPRequestHandler) -> str:
+    return (handler.headers.get("Host") or "").strip()
+
+
+def request_is_local(handler: BaseHTTPRequestHandler) -> bool:
+    name = request_host(handler).split(":")[0].strip("[]").lower()
+    return name in {"localhost", "127.0.0.1", "::1"}
+
+
+_TRUSTED_PROXIES = (
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("fc00::/7"),
+)
+_dummy_password_hash = ""
+
+
+def parse_ip(value: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    try:
+        return ipaddress.ip_address(value.strip())
+    except ValueError:
+        return None
+
+
+def is_trusted_proxy(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    return any(ip in network for network in _TRUSTED_PROXIES)
+
+
+def dummy_password_hash() -> str:
+    global _dummy_password_hash
+    if not _dummy_password_hash:
+        _dummy_password_hash = hash_password("not-a-real-password")
+    return _dummy_password_hash
+
+
+def client_ip(handler: BaseHTTPRequestHandler) -> str:
+    address = getattr(handler, "client_address", None)
+    peer_text = str(address[0] or "") if address else ""
+    peer = parse_ip(peer_text)
+    if peer is None or not is_trusted_proxy(peer):
+        return (peer_text or "desconhecido")[:80]
+    forwarded = handler.headers.get("X-Forwarded-For", "")
+    parts = [part.strip() for part in forwarded.split(",") if part.strip()]
+    for part in reversed(parts):
+        ip = parse_ip(part)
+        if ip is not None and not is_trusted_proxy(ip):
+            return str(ip)[:80]
+    if parts:
+        ip = parse_ip(parts[-1])
+        if ip is not None:
+            return str(ip)[:80]
+    return str(peer)[:80]
+
+
+def throttle_blocked(conn, buckets: list[tuple[str, int]]) -> bool:
+    cutoff = datetime.now(timezone.utc) - THROTTLE_WINDOW
+    for bucket, limit in buckets:
+        row = conn.execute(
+            """
+            SELECT failures FROM auth_throttle
+            WHERE bucket = %s AND window_start >= %s
+            """,
+            (bucket, cutoff),
+        ).fetchone()
+        if row and row[0] >= limit:
+            return True
+    return False
+
+
+def throttle_record(conn, buckets: list[str]) -> None:
+    cutoff = datetime.now(timezone.utc) - THROTTLE_WINDOW
+    now = datetime.now(timezone.utc)
+    for bucket in buckets:
+        conn.execute(
+            """
+            INSERT INTO auth_throttle (bucket, failures, window_start)
+            VALUES (%s, 1, %s)
+            ON CONFLICT (bucket) DO UPDATE
+            SET failures = CASE
+                    WHEN auth_throttle.window_start < %s THEN 1
+                    ELSE auth_throttle.failures + 1
+                END,
+                window_start = CASE
+                    WHEN auth_throttle.window_start < %s THEN %s
+                    ELSE auth_throttle.window_start
+                END
+            """,
+            (bucket, now, cutoff, cutoff, now),
+        )
+
+
+def throttle_clear(conn, buckets: list[str]) -> None:
+    if buckets:
+        conn.execute("DELETE FROM auth_throttle WHERE bucket = ANY(%s)", (buckets,))
+
+
+def login_buckets(ip: str, username: str) -> list[tuple[str, int]]:
+    user = username.lower()[:80]
+    return [
+        (f"login-pair:{ip}:{user}", LOGIN_PAIR_LIMIT),
+        (f"login-user:{user}", LOGIN_USER_LIMIT),
+        (f"login-ip:{ip}", LOGIN_IP_LIMIT),
+    ]
 
 
 def migrate_and_seed() -> None:
@@ -286,9 +478,6 @@ def page(title: str, body: str, *, logged: bool = False, current: str = "", wide
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{esc(title)} | Apinil</title>
   <link rel="icon" href="/assets/img/logo.png">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600;700&family=Outfit:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/assets/css/site.css">
   <link rel="stylesheet" href="/restrito/app.css">
 </head>
@@ -359,6 +548,10 @@ button.danger { background: #8d2b2b; }
 .record-form select {
   font: inherit; border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; background: #fff;
 }
+.record-form input[readonly] {
+  background: #f3f6f4; color: var(--muted); cursor: default;
+}
+.record-form textarea { min-height: 96px; resize: vertical; }
 .grid-wrap { overflow-x: auto; }
 table.grid { width: 100%; border-collapse: collapse; font-size: 15px; }
 table.grid th {
@@ -369,6 +562,7 @@ table.grid tbody tr { cursor: pointer; }
 table.grid tbody tr:hover { background: #f4faf6; }
 table.grid tbody tr:has(input:checked) { background: #e7f5ec; }
 .col-id { width: 72px; }
+.col-codigo { width: 150px; white-space: nowrap; }
 .col-nome { width: 110px; white-space: nowrap; }
 .col-esfera { width: 130px; }
 .grid-count { color: var(--muted); margin: 0 0 12px; }
@@ -420,7 +614,7 @@ def current_user(handler: BaseHTTPRequestHandler):
             JOIN app_user u ON u.id = s.user_id
             WHERE s.id = %s AND s.expires_at > now() AND u.active
             """,
-            (token,),
+            (session_id(token),),
         ).fetchone()
     if not row:
         return None
@@ -931,6 +1125,169 @@ grade.querySelectorAll("tbody tr").forEach((row) => {{
     return page("Condições de Pagamentos", body, logged=True, current=CONDICOES_PATH, wide=True)
 
 
+def centros_url(**params: str) -> str:
+    clean = {key: value for key, value in params.items() if value}
+    if not clean:
+        return CENTROS_PATH
+    return CENTROS_PATH + "?" + urlencode(clean)
+
+
+def list_centros(conn, q: str):
+    if not q:
+        return conn.execute(
+            "SELECT id, codigo_reduzido, nome, descricao FROM centro_custo ORDER BY id"
+        ).fetchall()
+    pattern = like_pattern(q)
+    return conn.execute(
+        """
+        SELECT id, codigo_reduzido, nome, descricao
+        FROM centro_custo
+        WHERE codigo_reduzido ILIKE %s ESCAPE '\\'
+           OR nome ILIKE %s ESCAPE '\\'
+           OR descricao ILIKE %s ESCAPE '\\'
+        ORDER BY id
+        """,
+        (pattern, pattern, pattern),
+    ).fetchall()
+
+
+def get_centro(conn, item_id: int):
+    return conn.execute(
+        "SELECT id, codigo_reduzido, nome, descricao FROM centro_custo WHERE id = %s",
+        (item_id,),
+    ).fetchone()
+
+
+def validate_centro(codigo: str, nome: str, descricao: str) -> dict[str, str]:
+    errors = {}
+    if not codigo:
+        errors["codigo_reduzido"] = "Informe o código reduzido."
+    elif not CODIGO_REDUZIDO_RE.fullmatch(codigo):
+        errors["codigo_reduzido"] = "Use letras, números e os sinais . - / , com no máximo 20 caracteres."
+    if not nome:
+        errors["nome"] = "Informe o nome."
+    elif len(nome) > 80:
+        errors["nome"] = "O nome pode ter no máximo 80 caracteres."
+    if not descricao:
+        errors["descricao"] = "Informe a descrição."
+    elif len(descricao) > 200:
+        errors["descricao"] = "A descrição pode ter no máximo 200 caracteres."
+    return errors
+
+
+def centros_page(*, rows, q: str, aviso: str, erro: str, editor: dict | None) -> bytes:
+    flashes = ""
+    if aviso:
+        flashes += f'<p class="flash">{esc(aviso)}</p>'
+    if erro:
+        flashes += f'<p class="flash error">{esc(erro)}</p>'
+    editor_html = ""
+    if editor:
+        field_errors = editor.get("errors") or {}
+
+        def field_error(key: str) -> str:
+            message = field_errors.get(key)
+            return f'<span class="error">{esc(message)}</span>' if message else ""
+
+        editor_html = f"""
+<section class="editor">
+  <h2>{esc(editor["titulo"])}</h2>
+  <form class="record-form" method="post" action="{esc(CENTROS_PATH)}">
+    <input type="hidden" name="acao" value="salvar">
+    <input type="hidden" name="id" value="{esc(editor["id"])}">
+    <input type="hidden" name="q" value="{esc(q)}">
+    <label>ID<input value="{esc(editor["id"])}" readonly tabindex="-1" placeholder="Gerado ao salvar"></label>
+    <label>Código reduzido<input name="codigo_reduzido" maxlength="20" required value="{esc(editor["codigo_reduzido"])}" autocomplete="off" autofocus>{field_error("codigo_reduzido")}</label>
+    <label>Nome<input name="nome" maxlength="80" required value="{esc(editor["nome"])}">{field_error("nome")}</label>
+    <label>Descrição<textarea name="descricao" maxlength="200" required>{esc(editor["descricao"])}</textarea>{field_error("descricao")}</label>
+    <div class="form-actions">
+      <button type="submit">Salvar</button>
+      <a class="btn" href="{esc(centros_url(q=q))}">Cancelar</a>
+    </div>
+  </form>
+</section>
+"""
+    body_rows = []
+    for item_id, codigo, nome, descricao in rows:
+        body_rows.append(
+            "<tr>"
+            f'<td class="col-id"><input type="radio" name="id" value="{item_id}" aria-label="Selecionar {esc(codigo)}"></td>'
+            f"<td>{item_id}</td>"
+            f'<td class="col-codigo">{esc(codigo)}</td>'
+            f"<td>{esc(nome)}</td>"
+            f"<td>{esc(descricao) if descricao else '—'}</td>"
+            "</tr>"
+        )
+    grid_body = "".join(body_rows) or '<tr><td colspan="5">Nenhum centro de custo encontrado.</td></tr>'
+    quantidade = len(rows)
+    legenda = "1 registro" if quantidade == 1 else f"{quantidade} registros"
+    body = f"""
+<h1>Centros de Custo</h1>
+{flashes}
+<div class="crud-toolbar">
+  <form class="search-form" method="get" action="{esc(CENTROS_PATH)}">
+    <input name="q" value="{esc(q)}" placeholder="Código, nome ou descrição" aria-label="Pesquisar centros de custo">
+    <button type="submit">Pesquisar</button>
+  </form>
+  <div class="crud-actions">
+    <a class="btn" href="{esc(centros_url(acao="incluir", q=q))}">Inserir</a>
+    <button type="submit" class="ghost" form="grade-centros" name="acao" value="editar" id="editar-centro">Editar</button>
+    <button type="submit" class="danger" form="grade-centros" name="acao" value="excluir" id="excluir-centro">Excluir</button>
+  </div>
+</div>
+{editor_html}
+<section class="grid-card">
+  <p class="grid-count">{esc(legenda)}</p>
+  <form id="grade-centros" method="post" action="{esc(CENTROS_PATH)}">
+    <input type="hidden" name="q" value="{esc(q)}">
+    <div class="grid-wrap">
+      <table class="grid">
+        <thead>
+          <tr><th></th><th>ID</th><th>Código reduzido</th><th>Nome</th><th>Descrição</th></tr>
+        </thead>
+        <tbody>{grid_body}</tbody>
+      </table>
+    </div>
+  </form>
+</section>
+<script>
+const grade = document.getElementById("grade-centros");
+function centroSelecionado() {{
+  const marcado = grade.querySelector('input[name="id"]:checked');
+  return marcado ? marcado.value : "";
+}}
+document.getElementById("editar-centro").addEventListener("click", (event) => {{
+  if (!centroSelecionado()) {{
+    event.preventDefault();
+    alert("Selecione um registro na grade.");
+  }}
+}});
+document.getElementById("excluir-centro").addEventListener("click", (event) => {{
+  if (!centroSelecionado()) {{
+    event.preventDefault();
+    alert("Selecione um registro na grade.");
+    return;
+  }}
+  if (!confirm("Excluir o centro de custo selecionado?")) event.preventDefault();
+}});
+grade.querySelectorAll("tbody tr").forEach((row) => {{
+  row.addEventListener("click", (event) => {{
+    if (event.target.closest("input,a,button")) return;
+    const radio = row.querySelector('input[type="radio"]');
+    if (radio) radio.checked = true;
+  }});
+  row.addEventListener("dblclick", () => {{
+    const radio = row.querySelector('input[type="radio"]');
+    if (!radio) return;
+    radio.checked = true;
+    document.getElementById("editar-centro").click();
+  }});
+}});
+</script>
+"""
+    return page("Centros de Custo", body, logged=True, current=CENTROS_PATH, wide=True)
+
+
 def is_admin(user) -> bool:
     return user.get("role") in ("master", "admin")
 
@@ -1245,14 +1602,25 @@ def module_page(title: str, text: str, current: str) -> bytes:
 
 
 class Handler(BaseHTTPRequestHandler):
+    timeout = REQUEST_TIMEOUT
+    server_version = "Apinil"
+    sys_version = ""
+
+    def version_string(self) -> str:
+        return "Apinil"
+
     def log_message(self, fmt: str, *args) -> None:
         print(fmt % args)
+
+    def add_security_headers(self) -> None:
+        for key, value in security_headers(request_host(self)):
+            self.send_header(key, value)
 
     def send_html(self, status: int, payload: bytes, *, headers: list[tuple[str, str]] | None = None) -> None:
         self.send_response(status)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
-        self.send_header("X-Content-Type-Options", "nosniff")
+        self.add_security_headers()
         for key, value in headers or []:
             self.send_header(key, value)
         self.send_header("Content-Length", str(len(payload)))
@@ -1263,6 +1631,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(303)
         self.send_header("Location", location)
         self.send_header("Cache-Control", "no-store")
+        self.add_security_headers()
         if cookie is not None:
             self.send_header("Set-Cookie", cookie)
         self.end_headers()
@@ -1274,10 +1643,17 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "text/css; charset=utf-8")
             self.send_header("Cache-Control", "no-store")
+            self.add_security_headers()
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
             return
+        if not path.startswith("/restrito"):
+            static = public_file(path)
+            if static is not None:
+                self.send_static(static)
+                return
+        ensure_schema()
         if not database_url():
             self.send_html(503, page("Indisponível", "<h1>Área restrita indisponível</h1><p>O banco ainda não está configurado.</p>"))
             return
@@ -1331,6 +1707,12 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self.handle_condicoes_get()
             return
+        if path == CENTROS_PATH:
+            if not user:
+                self.redirect("/restrito/login")
+                return
+            self.handle_centros_get()
+            return
         if path == USUARIOS_PATH:
             if not user:
                 self.redirect("/restrito/login")
@@ -1350,9 +1732,27 @@ class Handler(BaseHTTPRequestHandler):
             return
         self.send_html(404, page("Não encontrado", "<h1>Página não encontrada</h1>"))
 
+    def send_static(self, file_path: Path) -> None:
+        body = file_path.read_bytes()
+        content_type = STATIC_TYPES.get(file_path.suffix.lower(), "application/octet-stream")
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Cache-Control", "public, max-age=300")
+        self.add_security_headers()
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_POST(self) -> None:
         path = urlparse(self.path).path.rstrip("/")
-        length = int(self.headers.get("Content-Length", "0") or 0)
+        try:
+            length = int(self.headers.get("Content-Length", "0") or 0)
+        except ValueError:
+            length = -1
+        if length < 0 or length > MAX_FORM_BYTES:
+            self.send_html(413, page("Pedido grande", "<h1>Pedido grande demais</h1>"))
+            return
+        ensure_schema()
         raw = self.rfile.read(length).decode("utf-8", "replace")
         form = {key: values[0] for key, values in parse_qs(raw).items()}
         if path == "/restrito/login":
@@ -1389,6 +1789,12 @@ class Handler(BaseHTTPRequestHandler):
                 self.redirect("/restrito/login")
                 return
             self.handle_condicoes_post(form)
+            return
+        if path == CENTROS_PATH:
+            if not current_user(self):
+                self.redirect("/restrito/login")
+                return
+            self.handle_centros_post(form)
             return
         if path == USUARIOS_PATH:
             if not user:
@@ -1763,6 +2169,132 @@ class Handler(BaseHTTPRequestHandler):
             return
         self.redirect(condicoes_url(q=q, aviso=aviso))
 
+    def handle_centros_get(self) -> None:
+        params = self.query()
+        q = params.get("q", "").strip()[:80]
+        acao = params.get("acao", "")
+        aviso = {
+            "incluido": "Centro de custo inserido.",
+            "alterado": "Centro de custo alterado.",
+            "excluido": "Centro de custo excluído.",
+        }.get(params.get("aviso", ""), "")
+        erro = {
+            "selecione": "Selecione um registro na grade.",
+            "ausente": "Registro não encontrado.",
+        }.get(params.get("erro", ""), "")
+        editor = None
+        with connect() as conn:
+            if acao == "incluir":
+                editor = {
+                    "titulo": "Inserir centro de custo",
+                    "id": "",
+                    "codigo_reduzido": "",
+                    "nome": "",
+                    "descricao": "",
+                    "errors": {},
+                }
+            elif acao == "editar":
+                item_id = parse_record_id(params.get("id", ""))
+                row = get_centro(conn, item_id) if item_id else None
+                if row is None:
+                    erro = "Selecione um registro na grade."
+                else:
+                    editor = {
+                        "titulo": "Editar centro de custo",
+                        "id": str(row[0]),
+                        "codigo_reduzido": row[1],
+                        "nome": row[2],
+                        "descricao": row[3],
+                        "errors": {},
+                    }
+            rows = list_centros(conn, q)
+        self.send_html(200, centros_page(rows=rows, q=q, aviso=aviso, erro=erro, editor=editor))
+
+    def handle_centros_post(self, form: dict[str, str]) -> None:
+        acao = form.get("acao", "")
+        q = form.get("q", "").strip()[:80]
+        if acao == "salvar":
+            self.save_centro(form, q)
+            return
+        if acao == "editar":
+            item_id = parse_record_id(form.get("id", ""))
+            if item_id is None:
+                self.redirect(centros_url(q=q, erro="selecione"))
+                return
+            self.redirect(centros_url(acao="editar", id=str(item_id), q=q))
+            return
+        if acao == "excluir":
+            item_id = parse_record_id(form.get("id", ""))
+            if item_id is None:
+                self.redirect(centros_url(q=q, erro="selecione"))
+                return
+            with connect() as conn:
+                deleted = conn.execute(
+                    "DELETE FROM centro_custo WHERE id = %s", (item_id,)
+                ).rowcount
+                conn.commit()
+            if not deleted:
+                self.redirect(centros_url(q=q, erro="ausente"))
+                return
+            self.redirect(centros_url(q=q, aviso="excluido"))
+            return
+        self.redirect(CENTROS_PATH)
+
+    def save_centro(self, form: dict[str, str], q: str) -> None:
+        item_id = parse_record_id(form.get("id", ""))
+        codigo = form.get("codigo_reduzido", "").strip()
+        nome = " ".join(form.get("nome", "").split())
+        descricao = " ".join(form.get("descricao", "").split())
+        errors = validate_centro(codigo, nome, descricao)
+        editor = {
+            "titulo": "Editar centro de custo" if item_id else "Inserir centro de custo",
+            "id": str(item_id or ""),
+            "codigo_reduzido": codigo,
+            "nome": nome,
+            "descricao": descricao,
+            "errors": errors,
+        }
+        if errors:
+            with connect() as conn:
+                rows = list_centros(conn, q)
+            self.send_html(400, centros_page(rows=rows, q=q, aviso="", erro="", editor=editor))
+            return
+        try:
+            with connect() as conn:
+                if item_id:
+                    found = get_centro(conn, item_id)
+                    if found is None:
+                        self.redirect(centros_url(q=q, erro="ausente"))
+                        return
+                    conn.execute(
+                        """
+                        UPDATE centro_custo
+                        SET codigo_reduzido = %s, nome = %s, descricao = %s, updated_at = now()
+                        WHERE id = %s
+                        """,
+                        (codigo, nome, descricao, item_id),
+                    )
+                    aviso = "alterado"
+                else:
+                    conn.execute(
+                        """
+                        INSERT INTO centro_custo (codigo_reduzido, nome, descricao)
+                        VALUES (%s, %s, %s)
+                        """,
+                        (codigo, nome, descricao),
+                    )
+                    aviso = "incluido"
+                conn.commit()
+        except psycopg.errors.UniqueViolation:
+            editor["errors"] = {
+                "codigo_reduzido": "Já existe um centro de custo com este código reduzido."
+            }
+            with connect() as conn:
+                rows = list_centros(conn, q)
+            self.send_html(400, centros_page(rows=rows, q=q, aviso="", erro="", editor=editor))
+            return
+        self.redirect(centros_url(q=q, aviso=aviso))
+
     def handle_usuarios_get(self, user) -> None:
         params = self.query()
         q = params.get("q", "").strip()[:80]
@@ -1988,12 +2520,18 @@ class Handler(BaseHTTPRequestHandler):
         if nova != confirmar:
             self.send_html(400, password_form("A confirmação não confere com a senha."))
             return
+        bucket = f"password:{user['id']}"
         with connect() as conn:
+            if throttle_blocked(conn, [(bucket, PASSWORD_LIMIT)]):
+                self.send_html(429, password_form("Muitas tentativas. Espere alguns minutos e tente de novo."))
+                return
             row = conn.execute(
                 "SELECT password_hash FROM app_user WHERE id = %s AND active",
                 (user["id"],),
             ).fetchone()
             if not row or not verify_password(atual, row[0]):
+                throttle_record(conn, [bucket])
+                conn.commit()
                 self.send_html(401, password_form("A senha atual não confere."))
                 return
             if verify_password(nova, row[0]):
@@ -2007,16 +2545,32 @@ class Handler(BaseHTTPRequestHandler):
                 """,
                 (hash_password(nova), user["id"]),
             )
+            conn.execute("DELETE FROM app_session WHERE user_id = %s", (user["id"],))
+            throttle_clear(conn, [bucket])
+            token = secrets.token_urlsafe(32)
+            expires = datetime.now(timezone.utc) + timedelta(hours=SESSION_HOURS)
+            conn.execute(
+                "INSERT INTO app_session (id, user_id, expires_at) VALUES (%s, %s, %s)",
+                (session_id(token), user["id"], expires),
+            )
             conn.commit()
-        self.redirect("/restrito/cadastros")
+        self.redirect(
+            "/restrito/cadastros",
+            cookie=session_cookie(token, secure=not request_is_local(self)),
+        )
 
     def handle_login(self, username: str, password: str) -> None:
-        username = username.strip()
+        username = username.strip()[:80]
         generic = "Usuário ou senha inválidos."
+        limited = "Muitas tentativas. Espere alguns minutos e tente de novo."
         if not database_url():
             self.send_html(503, login_form("O banco ainda não está configurado."))
             return
+        buckets = login_buckets(client_ip(self), username)
         with connect() as conn:
+            if throttle_blocked(conn, buckets):
+                self.send_html(429, login_form(limited))
+                return
             row = conn.execute(
                 """
                 SELECT id, password_hash, active, must_change_password
@@ -2025,10 +2579,16 @@ class Handler(BaseHTTPRequestHandler):
                 """,
                 (username,),
             ).fetchone()
-            if not row or not verify_password(password, row[1]):
+            stored = row[1] if row else dummy_password_hash()
+            password_ok = verify_password(password, stored)
+            if not row or not password_ok:
+                throttle_record(conn, [bucket for bucket, _limit in buckets])
+                conn.commit()
                 self.send_html(401, login_form(generic))
                 return
             if not row[2]:
+                throttle_record(conn, [bucket for bucket, _limit in buckets])
+                conn.commit()
                 self.send_html(403, login_form("Usuário bloqueado. Procure o administrador."))
                 return
             must_change = bool(row[3])
@@ -2037,14 +2597,14 @@ class Handler(BaseHTTPRequestHandler):
             conn.execute("DELETE FROM app_session WHERE expires_at < now()")
             conn.execute(
                 "INSERT INTO app_session (id, user_id, expires_at) VALUES (%s, %s, %s)",
-                (token, row[0], expires),
+                (session_id(token), row[0], expires),
             )
+            throttle_clear(conn, [bucket for bucket, _limit in buckets[:2]])
             conn.commit()
-        cookie = (
-            f"{SESSION_COOKIE}={token}; HttpOnly; SameSite=Lax; Path=/; "
-            f"Max-Age={SESSION_HOURS * 3600}"
+        self.redirect(
+            PASSWORD_PATH if must_change else "/restrito/cadastros",
+            cookie=session_cookie(token, secure=not request_is_local(self)),
         )
-        self.redirect(PASSWORD_PATH if must_change else "/restrito/cadastros", cookie=cookie)
 
     def handle_logout(self) -> None:
         token = ""
@@ -2054,17 +2614,71 @@ class Handler(BaseHTTPRequestHandler):
                 token = value
         if token and database_url():
             with connect() as conn:
-                conn.execute("DELETE FROM app_session WHERE id = %s", (token,))
+                conn.execute("DELETE FROM app_session WHERE id = %s", (session_id(token),))
                 conn.commit()
-        cookie = f"{SESSION_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0"
-        self.redirect("/restrito/login", cookie=cookie)
+        self.redirect(
+            "/restrito/login",
+            cookie=session_cookie("", secure=not request_is_local(self), clear=True),
+        )
+
+
+_schema_ready = False
+
+
+def ensure_schema() -> None:
+    global _schema_ready
+    if _schema_ready or not database_url():
+        return
+    migrate_and_seed()
+    _schema_ready = True
+
+
+class BoundedHTTPServer(ThreadingHTTPServer):
+    daemon_threads = True
+    request_timeout = REQUEST_TIMEOUT
+
+    def __init__(self, server_address, handler):
+        super().__init__(server_address, handler)
+        self._slots = threading.BoundedSemaphore(MAX_WORKERS)
+
+    def process_request(self, request, client_address):
+        if not self._slots.acquire(blocking=False):
+            try:
+                request.settimeout(2)
+                request.sendall(
+                    b"HTTP/1.1 503 Service Unavailable\r\n"
+                    b"Connection: close\r\n"
+                    b"Retry-After: 1\r\n"
+                    b"Content-Length: 0\r\n\r\n"
+                )
+            except OSError:
+                pass
+            request.close()
+            return
+        try:
+            request.settimeout(self.request_timeout)
+        except OSError:
+            self._slots.release()
+            request.close()
+            return
+        try:
+            super().process_request(request, client_address)
+        except Exception:
+            self._slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._slots.release()
 
 
 def main() -> None:
-    migrate_and_seed()
+    ensure_schema()
     bind = os.environ.get("BIND", "127.0.0.1")
     port = int(os.environ.get("PORT", "8090"))
-    server = ThreadingHTTPServer((bind, port), Handler)
+    server = BoundedHTTPServer((bind, port), Handler)
     print(f"área restrita em http://{bind}:{port}/restrito/")
     server.serve_forever()
 

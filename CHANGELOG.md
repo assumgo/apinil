@@ -2,6 +2,26 @@
 
 O número publicado no site fica em `VERSION` e em `public/version.txt`. Cada versão estável recebe uma tag `vX.Y.Z` e um release no GitHub.
 
+## 0.8.2 — 2026-11-09
+
+- O limite de login usa o endereço de quem acessa, e não o do proxy local.
+- Uma senha errada e um usuário inexistente levam o mesmo tempo de verificação.
+- O deploy entra pela porta 2289 e só aceita a chave ed25519 gravada em `deploy/known_hosts`. O processo da área restrita escuta em loopback.
+- O Apache do servidor mantém o certificado já emitido e passa adiante o endereço de quem acessa.
+- A área restrita não carrega mais fontes da Google.
+
+## 0.8.1 — 2026-11-09
+
+- O acesso ao servidor passa a ser só por HTTPS, com redirecionamento e HSTS.
+- Login e troca de senha travam depois de várias tentativas, e o servidor limita requisições simultâneas.
+- As páginas não podem ser embutidas em outro site. A sessão guarda só o resumo do token e a troca de senha encerra as sessões anteriores.
+
+## 0.8.0 — 2026-11-07
+
+- Centros de Custo ganha formulário com ID, código reduzido, nome e descrição.
+- Inserir, editar e excluir. O ID é gerado pelo sistema e não pode ser alterado. O código reduzido é único.
+- O processo da área restrita também serve o site público quando a pasta `public` está disponível.
+
 ## 0.7.0 — 2026-11-07
 
 - Cadastro de usuários com ID, nome, login, e-mail único e senha.

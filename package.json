@@ -1,0 +1,8 @@
+{
+  "name": "apinil",
+  "private": true,
+  "scripts": {
+    "build": "mkdir -p dist && cp -a public/. dist/",
+    "start": "sh scripts/start-apinil.sh"
+  }
+}

@@ -19,6 +19,14 @@ CREATE TABLE IF NOT EXISTS app_session (
 CREATE INDEX IF NOT EXISTS app_session_user_idx ON app_session (user_id);
 CREATE INDEX IF NOT EXISTS app_session_expires_idx ON app_session (expires_at);
 
+CREATE TABLE IF NOT EXISTS auth_throttle (
+    bucket text PRIMARY KEY,
+    failures integer NOT NULL,
+    window_start timestamptz NOT NULL
+);
+
+DELETE FROM app_session WHERE length(id) <> 64 OR id !~ '^[0-9a-f]{64}$';
+
 CREATE TABLE IF NOT EXISTS tipo_documento (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     nome text NOT NULL,
@@ -64,6 +72,19 @@ CREATE TABLE IF NOT EXISTS condicao_pagamento (
 
 CREATE UNIQUE INDEX IF NOT EXISTS condicao_pagamento_nome_lower_idx
     ON condicao_pagamento (lower(nome));
+
+CREATE TABLE IF NOT EXISTS centro_custo (
+    id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    codigo_reduzido text NOT NULL,
+    nome text NOT NULL,
+    descricao text NOT NULL DEFAULT '',
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT centro_custo_codigo_uniq UNIQUE (codigo_reduzido)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS centro_custo_codigo_lower_idx
+    ON centro_custo (lower(codigo_reduzido));
 
 ALTER TABLE app_user ADD COLUMN IF NOT EXISTS email text;
 ALTER TABLE app_user ADD COLUMN IF NOT EXISTS must_change_password boolean NOT NULL DEFAULT false;
