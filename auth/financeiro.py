@@ -6,6 +6,7 @@ import json
 import re
 import xml.etree.ElementTree as ET
 from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 from decimal import Decimal, InvalidOperation
 from email import message_from_bytes
 from email.policy import default
@@ -172,7 +173,10 @@ def read_request_form(headers, rfile, max_form: int, max_upload: int):
     if not multipart:
         from urllib.parse import parse_qs
         parsed = parse_qs(raw.decode("utf-8", "replace"), keep_blank_values=True)
-        return {key: values[0] for key, values in parsed.items()}, {}, False
+        form = {}
+        for key, values in parsed.items():
+            form[key] = values if key == "ids" and len(values) > 1 else values[0]
+        return form, {}, False
     return parse_multipart(ctype, raw)
 
 
@@ -1654,32 +1658,121 @@ def handle_lancamento_post(handler, form: dict, natureza: str) -> None:
     handler.redirect(path + "?" + query_filtros(filtros, **extra))
 
 
-def titulos_page(rows, q: str) -> bytes:
+TITULOS_SQL = """
+SELECT t.id, t.natureza, p.nome, t.numero_documento, t.numero_parcela,
+       COUNT(*) OVER (PARTITION BY t.lancamento_id),
+       t.valor, t.vencimento, t.status, t.data_baixa, fp.descricao, t.conta
+FROM titulo t
+LEFT JOIN pessoa p ON p.id = t.pessoa_id
+LEFT JOIN forma_pagamento fp ON fp.id = t.forma_pagamento_id
+"""
+
+
+def hoje_br() -> str:
+    return format_data(datetime.now(ZoneInfo("America/Sao_Paulo")).date())
+
+
+def ids_marcados(form: dict) -> list[int]:
     app = ui()
+    somente = str(form.get("somente", "") or "").strip()
+    bruto = [somente] if somente else form.get("ids", "")
+    if isinstance(bruto, str):
+        bruto = [bruto] if bruto else []
+    ids = []
+    for item in bruto:
+        parsed = app.parse_record_id(str(item))
+        if parsed and parsed not in ids:
+            ids.append(parsed)
+    return ids[:200]
+
+
+def listar_titulos(conn, q: str):
+    if not q:
+        return conn.execute(TITULOS_SQL + " ORDER BY t.vencimento, t.id").fetchall()
+    like = "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+    return conn.execute(
+        TITULOS_SQL + """
+        WHERE coalesce(p.nome, '') ILIKE %s ESCAPE '\\'
+           OR t.numero_documento ILIKE %s ESCAPE '\\'
+        ORDER BY t.vencimento, t.id
+        """,
+        (like, like),
+    ).fetchall()
+
+
+def titulos_page(conn, rows, q: str, aviso: str, erro: str, baixa: dict) -> bytes:
+    app = ui()
+    errors = baixa.get("errors") or {}
+    marcados = set(baixa.get("ids") or [])
+    formas = conn.execute("SELECT id, descricao, '' FROM forma_pagamento ORDER BY descricao").fetchall()
+    abertos = 0
     body_rows = []
-    for natureza, nome, numero, parcela, total, valor, vencimento, status in rows:
+    for item_id, natureza, nome, numero, parcela, total, valor, vencimento, status, data_baixa, forma, conta in rows:
+        aberto = status != "baixado"
+        if aberto:
+            abertos += 1
+        checked = " checked" if item_id in marcados else ""
+        marca = (
+            f'<input type="checkbox" name="ids" value="{item_id}"{checked} aria-label="Selecionar título">'
+            if aberto else ""
+        )
+        if aberto:
+            acao = (
+                f'<button type="submit" name="somente" value="{item_id}">Baixar</button>'
+            )
+            detalhe = "<span class='pill off'>Aberto</span>"
+        else:
+            acao = ""
+            extra = " · ".join(
+                part for part in (format_data(data_baixa), forma or "", conta or "") if part
+            )
+            detalhe = "<span class='pill'>Baixado</span>" + (
+                f"<br><span class='hint'>{app.esc(extra)}</span>" if extra else ""
+            )
         body_rows.append(
             "<tr>"
+            f"<td>{marca}</td>"
             f"<td>{'Pagar' if natureza == 'pagar' else 'Receber'}</td>"
             f"<td><strong>{app.esc(nome or '—')}</strong><br><span class='hint'>{app.esc(numero)}</span></td>"
-            f"<td>{parcela}/{total}</td><td class='num'>{app.esc(format_valor(valor))}</td><td>{app.esc(format_data(vencimento))}</td>"
-            f"<td><span class='pill'>{app.esc(status.capitalize())}</span></td></tr>"
+            f"<td>{parcela}/{total}</td><td class='num'>{app.esc(format_valor(valor))}</td>"
+            f"<td>{app.esc(format_data(vencimento))}</td><td>{detalhe}</td>"
+            f"<td class='row-actions'>{acao}</td></tr>"
         )
+    marcar = '<input type="checkbox" id="marcar-titulos" aria-label="Selecionar títulos em aberto">' if abertos else ""
     table = (
-        "<table class='grid'><thead><tr><th>Natureza</th><th>Pessoa</th><th>Parcela</th><th>Valor</th><th>Vencimento</th><th>Status</th></tr></thead><tbody>"
-        + ("".join(body_rows) or "<tr><td colspan='6'>Nenhum título gerado.</td></tr>")
+        "<table class='grid'><thead><tr>"
+        f"<th>{marcar}</th><th>Natureza</th><th>Pessoa</th><th>Parcela</th><th class='num'>Valor</th>"
+        "<th>Vencimento</th><th>Status</th><th></th></tr></thead><tbody>"
+        + ("".join(body_rows) or "<tr><td colspan='8'>Nenhum título gerado.</td></tr>")
         + "</tbody></table>"
     )
+    data_valor = baixa.get("data") or hoje_br()
     body = f"""
 <header class="page-head">
   <p class="eyebrow">FINANCEIRO</p>
   <h1>Títulos</h1>
-  <p class="lede">Os títulos nascem das entradas de contas a pagar e contas a receber.</p>
+  <p class="lede">Baixe um título ou vários de uma vez. A data, a forma e a conta valem para todos os marcados.</p>
 </header>
+{app.flashes_html(aviso, erro)}
 <section class="panel">
   <div class="panel-head"><h2>Títulos gerados</h2><span>{app.esc(app.count_label(len(rows)))}</span></div>
-  <div class="grid-wrap">{table}</div>
+  <form id="baixa" class="baixa-bar" method="post" action="{TITULOS_PATH}" onsubmit="return confirm('Confirmar a baixa?')">
+    <input type="hidden" name="acao" value="baixar">
+    <input type="hidden" name="q" value="{app.esc(q)}">
+    <label>Data da baixa<input name="data_baixa" placeholder="dd/mm/aaaa" value="{app.esc(data_valor)}">{app.field_error(errors, "data_baixa")}</label>
+    <label>Forma<select name="forma_pagamento_id">{opcoes(formas, baixa.get("forma", ""), "Selecione")}</select>{app.field_error(errors, "forma_pagamento_id")}</label>
+    <label>Conta<input name="conta" maxlength="80" value="{app.esc(baixa.get("conta", ""))}" placeholder="Conta do pagamento ou recebimento">{app.field_error(errors, "conta")}</label>
+    <button type="submit">Baixar selecionados</button>
+    <p class="hint">Marque os títulos em aberto ou use Baixar na linha.</p>
+    <div class="grid-wrap">{table}</div>
+  </form>
 </section>
+<script>
+const marcar = document.getElementById("marcar-titulos");
+if (marcar) marcar.addEventListener("change", () => {{
+  document.querySelectorAll('#baixa input[name="ids"]').forEach((box) => {{ box.checked = marcar.checked; }});
+}});
+</script>
 """
     return app.page(
         "Títulos", body, logged=True, current=TITULOS_PATH,
@@ -1689,35 +1782,68 @@ def titulos_page(rows, q: str) -> bytes:
 
 def handle_titulos_get(handler) -> None:
     app = ui()
-    q = handler.query().get("q", "").strip()[:80]
+    params = handler.query()
+    q = params.get("q", "").strip()[:80]
+    n = params.get("n", "")
+    aviso = ""
+    if params.get("aviso") == "baixado" and n.isdigit():
+        aviso = "1 título baixado." if n == "1" else f"{n} títulos baixados."
     with app.connect() as conn:
-        if not q:
-            rows = conn.execute(
-                """
-                SELECT t.natureza, p.nome, t.numero_documento, t.numero_parcela,
-                       COUNT(*) OVER (PARTITION BY t.lancamento_id),
-                       t.valor, t.vencimento, t.status
-                FROM titulo t
-                LEFT JOIN pessoa p ON p.id = t.pessoa_id
-                ORDER BY t.vencimento, t.id
-                """
-            ).fetchall()
-        else:
-            like = "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
-            rows = conn.execute(
-                """
-                SELECT t.natureza, p.nome, t.numero_documento, t.numero_parcela,
-                       COUNT(*) OVER (PARTITION BY t.lancamento_id),
-                       t.valor, t.vencimento, t.status
-                FROM titulo t
-                LEFT JOIN pessoa p ON p.id = t.pessoa_id
-                WHERE coalesce(p.nome, '') ILIKE %s ESCAPE '\\'
-                   OR t.numero_documento ILIKE %s ESCAPE '\\'
-                ORDER BY t.vencimento, t.id
-                """,
-                (like, like),
-            ).fetchall()
-    handler.send_html(200, titulos_page(rows, q))
+        rows = listar_titulos(conn, q)
+        payload = titulos_page(conn, rows, q, aviso, "", {"data": hoje_br()})
+    handler.send_html(200, payload)
+
+
+def handle_titulos_post(handler, form: dict) -> None:
+    app = ui()
+    q = str(form.get("q", "") or "").strip()[:80]
+    baixa = {
+        "data": str(form.get("data_baixa", "") or "").strip(),
+        "forma": str(form.get("forma_pagamento_id", "") or "").strip(),
+        "conta": str(form.get("conta", "") or "").strip()[:80],
+        "ids": ids_marcados(form),
+        "errors": {},
+    }
+    if not baixa["ids"]:
+        baixa["errors"]["data_baixa"] = "Selecione ao menos um título em aberto."
+    elif parse_data(baixa["data"]) is None:
+        baixa["errors"]["data_baixa"] = "Informe a data da baixa no formato dd/mm/aaaa."
+    elif not baixa["forma"].isdigit():
+        baixa["errors"]["forma_pagamento_id"] = "Escolha a forma de pagamento ou recebimento."
+    elif not baixa["conta"]:
+        baixa["errors"]["conta"] = "Informe a conta."
+    if baixa["errors"]:
+        with app.connect() as conn:
+            rows = listar_titulos(conn, q)
+            payload = titulos_page(conn, rows, q, "", "", baixa)
+        handler.send_html(400, payload)
+        return
+    with app.connect() as conn:
+        forma = conn.execute(
+            "SELECT id FROM forma_pagamento WHERE id = %s", (int(baixa["forma"]),)
+        ).fetchone()
+        if forma is None:
+            baixa["errors"]["forma_pagamento_id"] = "Escolha a forma de pagamento ou recebimento."
+            rows = listar_titulos(conn, q)
+            payload = titulos_page(conn, rows, q, "", "", baixa)
+            handler.send_html(400, payload)
+            return
+        atualizados = conn.execute(
+            """
+            UPDATE titulo
+            SET status = 'baixado', data_baixa = %s, forma_pagamento_id = %s, conta = %s
+            WHERE id = ANY(%s) AND status = 'aberto'
+            """,
+            (parse_data(baixa["data"]), int(baixa["forma"]), baixa["conta"], baixa["ids"]),
+        ).rowcount
+        conn.commit()
+        if not atualizados:
+            rows = listar_titulos(conn, q)
+            payload = titulos_page(conn, rows, q, "", "Nenhum título em aberto para baixar.", baixa)
+            handler.send_html(400, payload)
+            return
+    destino = TITULOS_PATH + "?" + urlencode({"aviso": "baixado", "n": str(atualizados), "q": q})
+    handler.redirect(destino)
 
 
 def handle_arquivo_get(handler) -> None:
@@ -1779,5 +1905,8 @@ def handle_financeiro_post(handler, path: str, form: dict) -> None:
         return
     if path == RECEBER_PATH:
         handle_lancamento_post(handler, form, "receber")
+        return
+    if path == TITULOS_PATH:
+        handle_titulos_post(handler, form)
         return
     handler.send_html(404, ui().page("Não encontrado", "<h1>Página não encontrada</h1>", logged=True))

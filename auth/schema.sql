@@ -185,4 +185,10 @@ CREATE TABLE IF NOT EXISTS titulo (
 );
 
 CREATE INDEX IF NOT EXISTS titulo_natureza_idx ON titulo (natureza, vencimento);
+
+ALTER TABLE titulo ADD COLUMN IF NOT EXISTS data_baixa date;
+
+ALTER TABLE titulo ADD COLUMN IF NOT EXISTS forma_pagamento_id bigint REFERENCES forma_pagamento (id);
+
+ALTER TABLE titulo ADD COLUMN IF NOT EXISTS conta text NOT NULL DEFAULT '';
 CREATE INDEX IF NOT EXISTS lancamento_natureza_idx ON lancamento (natureza, id);

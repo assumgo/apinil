@@ -835,6 +835,22 @@ html[data-theme="dark"] .row-actions a,
 html[data-theme="dark"] .row-actions button { color: #f3faf6; }
 html[data-theme="dark"] .row-actions button.link-danger,
 html[data-theme="dark"] button.link-danger { color: #ffb4b4; }
+.app-body input[type="checkbox"] {
+  width: 16px; height: 16px; padding: 0; accent-color: var(--green); vertical-align: middle;
+}
+.baixa-bar {
+  display: grid;
+  grid-template-columns: 160px minmax(140px, 1fr) minmax(180px, 1.4fr) auto;
+  gap: 8px;
+  align-items: end;
+  margin: 0 0 8px;
+}
+.baixa-bar input[type="hidden"] { display: none; }
+.baixa-bar > button {
+  box-sizing: border-box; height: 40px; margin: 0; padding: 0 16px; white-space: nowrap;
+}
+.baixa-bar .hint, .baixa-bar .grid-wrap { grid-column: 1 / -1; }
+.baixa-bar .hint { margin: 0; }
 .pill { display: inline-block; background: #e5f6ea; color: #114d2c; border-radius: 999px; padding: 3px 10px; font-size: 12px; font-weight: 700; white-space: nowrap; }
 .pill.off { background: #fdecec; color: #8d2b2b; }
 html[data-theme="dark"] .pill { background: #1b4a30; color: #d8f5e4; }
@@ -854,7 +870,7 @@ dialog.modal h2 { margin: 0 0 8px; }
   .app-side { transform: translateX(-105%); transition: transform .2s ease; z-index: 20; }
   .app-side.is-open { transform: none; }
   .app-main { margin-left: 0; }
-  .split, .split.wide-form { grid-template-columns: 1fr; }
+  .split, .split.wide-form, .baixa-bar { grid-template-columns: 1fr 1fr; }
   .parcela { grid-template-columns: 1fr; }
   .app-top { padding: 12px; }
   .app-content { padding: 8px 12px 36px; }
@@ -1792,7 +1808,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self.handle_usuarios_post(user, form)
             return
-        if path in ("/restrito/cadastros/pessoas", "/restrito/contas-a-pagar", "/restrito/contas-a-receber"):
+        if path in ("/restrito/cadastros/pessoas", "/restrito/contas-a-pagar", "/restrito/contas-a-receber", "/restrito/titulos"):
             if not user:
                 self.redirect("/restrito/login")
                 return
