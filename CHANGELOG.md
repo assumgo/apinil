@@ -2,6 +2,11 @@
 
 O número publicado no site fica em `VERSION` e em `public/version.txt`. Cada versão estável recebe uma tag `vX.Y.Z` e um release no GitHub.
 
+## 0.8.3 — 2026-11-15
+
+- A área restrita passa a usar o painel com menu lateral, pesquisa no topo e formulário ao lado da lista.
+- As cores continuam o verde da Apinil. Os registros já gravados permanecem.
+
 ## 0.8.2 — 2026-11-09
 
 - O limite de login usa o endereço de quem acessa, e não o do proxy local.

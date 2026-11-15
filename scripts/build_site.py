@@ -801,7 +801,7 @@ html { scroll-behavior: smooth; }
 body {
   margin: 0;
   color: var(--ink);
-  background: var(--white);
+  background: var(--paper);
   font-family: Outfit, "Segoe UI", sans-serif;
   font-size: 17px;
   line-height: 1.55;
@@ -914,7 +914,10 @@ h1 { text-align: center; font-size: clamp(40px, 6vw, 64px); margin: 28px 0 8px; 
   text-align: center;
   text-decoration: none;
   color: var(--ink);
-  background: transparent;
+  background: var(--white);
+  border-radius: 16px;
+  box-shadow: var(--shadow);
+  padding: 12px 8px 16px;
 }
 .card img {
   width: min(100%, 280px);

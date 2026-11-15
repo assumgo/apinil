@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import contextvars
 import hashlib
 import hmac
 import html
@@ -442,35 +443,115 @@ def esc(value: str) -> str:
     return html.escape(value, quote=True)
 
 
-def nav_link(href: str, label: str, current: str, *, sub: bool = False) -> str:
+ICONS = {
+    "home": '<path d="M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-5v-6H10v6H5a1 1 0 0 1-1-1z"/>',
+    "folder": '<path d="M3 7.5A1.5 1.5 0 0 1 4.5 6H9l2 2h8.5A1.5 1.5 0 0 1 21 9.5v8A1.5 1.5 0 0 1 19.5 19h-15A1.5 1.5 0 0 1 3 17.5z"/>',
+    "users": '<path d="M16 19v-1a3 3 0 0 0-3-3H7a3 3 0 0 0-3 3v1"/><circle cx="10" cy="8" r="3"/><path d="M20 19v-1a3 3 0 0 0-2.2-2.9"/><path d="M16 5.1a3 3 0 0 1 0 5.8"/>',
+    "file": '<path d="M7 3.5h7l5 5V20a1.5 1.5 0 0 1-1.5 1.5h-10.5A1.5 1.5 0 0 1 6 20V5A1.5 1.5 0 0 1 7.5 3.5H7z"/><path d="M14 3.5V9h5"/>',
+    "calendar": '<rect x="4" y="5" width="16" height="15" rx="2"/><path d="M8 3.5V7M16 3.5V7M4 10h16"/>',
+    "card": '<rect x="3" y="6" width="18" height="12" rx="2"/><path d="M3 10h18"/>',
+    "tag": '<path d="M3 12V5.5A1.5 1.5 0 0 1 4.5 4H11l9 9-7 7z"/><circle cx="8" cy="8" r="1.2"/>',
+    "user": '<circle cx="12" cy="8" r="3.2"/><path d="M5 19.5v-1A4.5 4.5 0 0 1 9.5 14h5a4.5 4.5 0 0 1 4.5 4.5v1"/>',
+    "down": '<path d="M7 10h10l-5 6z"/>',
+    "up": '<path d="M7 14h10l-5-6z"/>',
+    "moon": '<path d="M16 3.5A8 8 0 1 0 20.5 14 6.2 6.2 0 0 1 16 3.5z"/>',
+    "search": '<circle cx="11" cy="11" r="6"/><path d="m16 16 4 4"/>',
+    "menu": '<path d="M4 7h16M4 12h16M4 17h16"/>',
+}
+
+
+def icon(name: str) -> str:
+    return (
+        f'<svg class="ico" viewBox="0 0 24 24" aria-hidden="true" fill="none" '
+        f'stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'
+        f'{ICONS[name]}</svg>'
+    )
+
+
+NAV_ICONS = {
+    "/restrito/cadastros/pessoas": "users",
+    "/restrito/cadastros/tipos-de-documentos": "file",
+    "/restrito/cadastros/condicoes-de-pagamentos": "calendar",
+    "/restrito/cadastros/formas-de-pagamentos": "card",
+    "/restrito/cadastros/centros-de-custo": "tag",
+    "/restrito/cadastros/usuarios": "user",
+    "/restrito/contas-a-pagar": "down",
+    "/restrito/contas-a-receber": "up",
+    "/restrito/titulos": "file",
+}
+
+
+def nav_link(href: str, label: str, current: str) -> str:
     path = href.rstrip("/") or "/"
-    classes = ["sub"] if sub else []
-    if path == "/restrito/cadastros" and current.startswith("/restrito/cadastros"):
-        classes.append("is-section")
-    class_attr = f' class="{" ".join(classes)}"' if classes else ""
     selected = ' aria-current="page"' if current == path else ""
-    return f'<a href="{esc(href)}"{class_attr}{selected}>{esc(label)}</a>'
+    mark = icon(NAV_ICONS.get(path, "file"))
+    return f'<a href="{esc(href)}"{selected}>{mark}<span>{esc(label)}</span></a>'
 
 
 def side_nav(current: str) -> str:
-    links = [nav_link("/restrito/cadastros", "Cadastros", current)]
-    links.append(
-        '<div class="submenu">'
-        + "".join(nav_link(href, label, current, sub=True) for href, label, _text in CADASTROS)
-        + "</div>"
-    )
+    user = VIEWER.get()
+    cadastro_open = current.startswith("/restrito/cadastros")
+    section = "is-open" if cadastro_open else ""
+    links = [
+        f'<a href="/restrito/cadastros"{" aria-current=\"page\"" if current == "/restrito/cadastros" else ""}>'
+        f'{icon("home")}<span>Início</span></a>',
+        f'<p class="nav-label {section}">Cadastros</p>',
+        '<div class="submenu">',
+        "".join(nav_link(href, label, current) for href, label, _text in CADASTROS),
+        "</div>",
+    ]
     links.extend(nav_link(href, label, current) for href, label, _text in MODULES)
-    return (
-        '<nav class="side">'
-        + "".join(links)
-        + '<form method="post" action="/restrito/sair"><button type="submit">Sair</button></form>'
-        "</nav>"
-    )
+    account = ""
+    if user:
+        identity = user.get("email") or user.get("username") or ""
+        account = (
+            '<div class="account">'
+            "<span>Conectado como</span>"
+            f"<strong>{esc(user.get('name') or identity)}</strong>"
+            f"<small>{esc(identity)}</small>"
+            '<form method="post" action="/restrito/sair"><button type="submit" class="link-danger">Sair</button></form>'
+            "</div>"
+        )
+    return '<nav class="side">' + "".join(links) + "</nav>" + account
 
 
-def page(title: str, body: str, *, logged: bool = False, current: str = "", wide: bool = False) -> bytes:
-    nav = side_nav(current) if logged else ""
-    shell_class = "restrito-shell wide" if wide else "restrito-shell"
+def page(
+    title: str,
+    body: str,
+    *,
+    logged: bool = False,
+    current: str = "",
+    wide: bool = False,
+    search: dict | None = None,
+    action: dict | None = None,
+) -> bytes:
+    if not logged:
+        document = f"""<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{esc(title)} | Apinil</title>
+  <link rel="icon" href="/assets/img/logo.png">
+  <link rel="stylesheet" href="/assets/css/site.css">
+  <link rel="stylesheet" href="/restrito/app.css">
+</head>
+<body class="app-body app-login">
+  <main class="login-wrap">{body}</main>
+</body>
+</html>"""
+        return document.encode("utf-8")
+    search_html = ""
+    if search:
+        search_html = (
+            f'<form class="top-search" method="get" action="{esc(search["action"])}">'
+            f'{icon("search")}'
+            f'<input name="q" value="{esc(search.get("q", ""))}" placeholder="{esc(search.get("placeholder", "Pesquisar"))}" aria-label="{esc(search.get("placeholder", "Pesquisar"))}">'
+            "</form>"
+        )
+    action_html = ""
+    if action:
+        action_html = f'<a class="primary" href="{esc(action["href"])}">{esc(action["label"])}</a>'
     document = f"""<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -481,14 +562,35 @@ def page(title: str, body: str, *, logged: bool = False, current: str = "", wide
   <link rel="stylesheet" href="/assets/css/site.css">
   <link rel="stylesheet" href="/restrito/app.css">
 </head>
-<body class="restrito-body">
-  <header class="site-header">
-    <div class="header-inner">
-      <a class="brand" href="/about-1/"><img src="/assets/img/logo.png" alt="Apinil cosméticos"></a>
-      <a class="restrito-link" href="/restrito/cadastros" aria-label="Área restrita" title="Área restrita">{LOCK}</a>
-    </div>
-  </header>
-  <div class="{shell_class}">{nav}<main class="restrito-main">{body}</main></div>
+<body class="app-body">
+  <aside class="app-side" id="app-side">
+    <a class="app-brand" href="/restrito/cadastros"><img src="/assets/img/logo.png" alt="Apinil cosméticos"></a>
+    {side_nav(current)}
+  </aside>
+  <div class="app-main">
+    <header class="app-top">
+      <button type="button" class="icon-btn menu-btn" id="menu-btn" aria-label="Abrir menu">{icon("menu")}</button>
+      {search_html}
+      <div class="top-actions">
+        <button type="button" class="icon-btn" id="theme-btn" aria-label="Alternar tema">{icon("moon")}</button>
+        {action_html}
+      </div>
+    </header>
+    <div class="app-content">{body}</div>
+  </div>
+  <script>
+    const root = document.documentElement;
+    const saved = localStorage.getItem("apinil-theme");
+    if (saved === "dark") root.dataset.theme = "dark";
+    document.getElementById("theme-btn").addEventListener("click", () => {{
+      const next = root.dataset.theme === "dark" ? "" : "dark";
+      if (next) root.dataset.theme = next;
+      else delete root.dataset.theme;
+      localStorage.setItem("apinil-theme", next);
+    }});
+    const side = document.getElementById("app-side");
+    document.getElementById("menu-btn").addEventListener("click", () => side.classList.toggle("is-open"));
+  </script>
 </body>
 </html>"""
     return document.encode("utf-8")
@@ -500,82 +602,194 @@ LOCK = """<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fil
 </svg>"""
 
 APP_CSS = """
-.restrito-body { background: var(--paper); min-height: 100vh; }
-.restrito-shell { max-width: 1100px; margin: 0 auto; padding: 28px 20px 64px; display: grid; grid-template-columns: 220px 1fr; gap: 28px; }
-.restrito-shell:not(:has(.side)) { grid-template-columns: 1fr; }
-.side { display: flex; flex-direction: column; gap: 8px; }
-.side a, .side button {
-  text-align: left; text-decoration: none; color: var(--green-dark);
-  background: white; border: 1px solid var(--line); border-radius: 14px;
-  padding: 12px 14px; font: inherit; font-weight: 600; cursor: pointer;
+html[data-theme="dark"] {
+  --green: #3dbe74;
+  --green-dark: #d7f5e4;
+  --ink: #e7f0ea;
+  --muted: #a8b7ad;
+  --line: #2c3a32;
+  --paper: #121815;
+  --white: #1c2420;
+  --shadow: 0 10px 30px rgba(0, 0, 0, .28);
 }
-.side a:hover, .side button:hover { border-color: var(--green); }
-.side a[aria-current="page"], .side a.is-section { background: var(--green); color: white; border-color: var(--green); }
-.submenu { display: flex; flex-direction: column; gap: 4px; margin: -2px 0 4px 14px; }
-.submenu a { font-size: 15px; font-weight: 500; padding: 8px 12px; }
-.restrito-main h1 { text-align: left; margin-top: 0; }
-.login-card, .module-card {
-  background: white; border-radius: 24px; padding: 28px; box-shadow: var(--shadow);
+.app-body {
+  margin: 0; min-height: 100vh; background: var(--paper); color: var(--ink);
+  font-family: "Segoe UI", sans-serif; font-size: 15px;
 }
-.login-card { max-width: 440px; margin: 24px auto; }
-.login-card h1, .login-card p { text-align: left; }
-.login-card form, .module-grid { display: grid; gap: 14px; }
-.module-grid { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
-.module-card { text-decoration: none; color: inherit; display: block; }
-.module-card h2 { text-align: left; margin: 0 0 8px; font-size: 32px; }
-.module-card p { margin: 0; color: var(--muted); }
-.error { color: #8d2b2b; font-weight: 600; }
-.restrito-shell.wide { max-width: 1240px; }
-.crud-toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 0 0 16px; }
-.search-form { display: flex; gap: 8px; flex: 1 1 280px; align-items: center; margin: 0; }
-.search-form input { flex: 1; min-width: 180px; }
-.crud-actions { display: flex; gap: 8px; flex-wrap: wrap; }
-a.btn, button.ghost {
-  background: white; color: var(--green-dark); border: 1px solid var(--line);
+.app-body h1, .app-body h2, .app-body .section-title {
+  font-family: "Segoe UI", sans-serif; text-transform: none; letter-spacing: 0; text-align: left; color: var(--ink);
 }
-a.btn {
-  border-radius: 999px; padding: 12px 18px; font-weight: 600;
-  text-decoration: none; display: inline-block;
+.app-login { display: grid; place-items: center; padding: 32px 16px; }
+.login-wrap { width: min(440px, 100%); }
+.login-card {
+  background: var(--white); border-radius: 18px; padding: 28px; box-shadow: var(--shadow);
 }
-button.danger { background: #8d2b2b; }
-.flash { background: #e7f5ec; color: var(--green-dark); border-radius: 14px; padding: 12px 14px; margin: 0 0 14px; }
-.flash.error { background: #fdecec; color: #8d2b2b; }
-.editor, .grid-card {
-  background: white; border-radius: 24px; padding: 22px; box-shadow: var(--shadow); margin-bottom: 16px;
+.login-card h1 { margin: 12px 0 6px; font-size: 28px; }
+.login-card p { color: var(--muted); }
+.login-brand { height: 64px; width: auto; }
+.app-body form { display: grid; gap: 12px; }
+.app-body label { display: grid; gap: 6px; font-size: 13px; font-weight: 600; color: var(--muted); }
+.app-body input, .app-body textarea, .app-body select {
+  font: inherit; color: var(--ink); background: #f3f6f4; border: 1px solid transparent;
+  border-radius: 10px; padding: 12px 14px;
 }
-.editor h2 { text-align: left; margin: 0 0 12px; font-size: 32px; }
-.record-form { display: grid; gap: 12px; }
-.record-form select {
-  font: inherit; border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; background: #fff;
+html[data-theme="dark"] .app-body input,
+html[data-theme="dark"] .app-body textarea,
+html[data-theme="dark"] .app-body select { background: #121815; }
+.app-body input:focus, .app-body textarea:focus, .app-body select:focus {
+  outline: none; border-color: var(--green); background: var(--white);
 }
-.record-form input[readonly] {
-  background: #f3f6f4; color: var(--muted); cursor: default;
+.app-body button, .app-body .primary {
+  border: 0; background: var(--green); color: white; border-radius: 10px;
+  padding: 12px 16px; font: inherit; font-weight: 700; cursor: pointer; text-decoration: none;
 }
+.app-side {
+  position: fixed; inset: 0 auto 0 0; width: 248px; background: #f7faf8;
+  border-right: 1px solid var(--line); display: flex; flex-direction: column; padding: 18px 14px 16px;
+}
+html[data-theme="dark"] .app-side { background: #18211c; }
+.app-brand img { height: 58px; width: auto; display: block; margin: 0 8px 18px; }
+.side { display: flex; flex-direction: column; gap: 4px; overflow: auto; }
+.side a, .nav-label {
+  display: flex; align-items: center; gap: 10px; text-decoration: none; color: var(--ink);
+  border-radius: 10px; padding: 9px 12px; font-weight: 600;
+}
+.nav-label { margin: 14px 0 2px; color: var(--muted); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; }
+.side a:hover { background: #e7f3ec; }
+html[data-theme="dark"] .side a:hover { background: #24302a; }
+.side a[aria-current="page"] { background: #e5f3ea; color: var(--green-dark); }
+html[data-theme="dark"] .side a[aria-current="page"] { background: #234233; color: var(--green); }
+.submenu { display: flex; flex-direction: column; gap: 2px; margin-left: 8px; }
+.submenu a { font-weight: 500; }
+.ico { width: 18px; height: 18px; flex: 0 0 auto; }
+.account { margin-top: auto; padding-top: 16px; border-top: 1px solid var(--line); display: grid; gap: 2px; }
+.account span { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.account strong { font-size: 14px; }
+.account small { color: var(--muted); }
+.account form { display: block; }
+.link-danger, button.link-danger {
+  background: transparent; color: #c43838; padding: 8px 0; text-align: left; font-weight: 700;
+}
+.app-main { margin-left: 248px; min-height: 100vh; }
+.app-top {
+  position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 12px;
+  padding: 16px 22px; background: rgba(244, 248, 245, .92); backdrop-filter: blur(8px);
+}
+html[data-theme="dark"] .app-top { background: rgba(18, 24, 21, .92); }
+.app-body .top-search {
+  flex: 1; display: flex; align-items: center; gap: 8px; background: var(--white);
+  border: 1px solid var(--line); border-radius: 999px; padding: 0 14px; min-width: 0;
+}
+.top-search input { border: 0; background: transparent; padding: 11px 0; width: 100%; }
+.top-search input:focus { border: 0; background: transparent; }
+.top-actions { display: flex; align-items: center; gap: 10px; margin-left: auto; }
+.icon-btn {
+  width: 40px; height: 40px; border-radius: 999px; background: var(--white); color: var(--ink);
+  border: 1px solid var(--line); display: grid; place-items: center; padding: 0;
+}
+.menu-btn { display: none; }
+.app-content { padding: 8px 22px 48px; }
+.page-head { margin: 0 0 16px; }
+.eyebrow { margin: 0 0 4px; color: var(--green); font-size: 12px; font-weight: 700; letter-spacing: .12em; }
+.page-head h1 { margin: 0; font-size: 32px; }
+.lede { margin: 6px 0 0; color: var(--muted); max-width: 640px; }
+.flash { background: #e7f5ec; color: var(--green-dark); border-radius: 12px; padding: 12px 14px; margin: 0 0 14px; }
+.flash.error, .error { color: #8d2b2b; }
+.flash.error { background: #fdecec; font-weight: 600; }
+.split { display: grid; grid-template-columns: minmax(260px, 340px) minmax(0, 1fr); gap: 16px; align-items: start; }
+.panel { background: var(--white); border-radius: 16px; box-shadow: var(--shadow); padding: 18px; }
+.panel h2 { margin: 0 0 14px; font-size: 18px; }
+.panel-head { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
+.panel-head span { color: var(--muted); font-size: 13px; white-space: nowrap; }
+.record-form button[type="submit"] { width: 100%; margin-top: 4px; }
+.text-link { color: var(--muted); font-weight: 600; text-decoration: none; text-align: center; }
 .record-form textarea { min-height: 96px; resize: vertical; }
+.record-form input[readonly] { color: var(--muted); }
+.checkline { display: flex; align-items: center; justify-content: space-between; color: var(--ink); }
+.checkline input { width: auto; accent-color: var(--green); }
 .grid-wrap { overflow-x: auto; }
-table.grid { width: 100%; border-collapse: collapse; font-size: 15px; }
+table.grid { width: 100%; border-collapse: collapse; }
 table.grid th {
-  font-size: 12px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); font-weight: 600;
+  font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 700;
 }
-table.grid td, table.grid th { padding: 10px 12px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
-table.grid tbody tr { cursor: pointer; }
-table.grid tbody tr:hover { background: #f4faf6; }
-table.grid tbody tr:has(input:checked) { background: #e7f5ec; }
-.col-id { width: 72px; }
-.col-codigo { width: 150px; white-space: nowrap; }
-.col-nome { width: 110px; white-space: nowrap; }
-.col-esfera { width: 130px; }
-.grid-count { color: var(--muted); margin: 0 0 12px; }
-.checkline { display: flex; align-items: center; gap: 10px; }
-.checkline input { width: auto; padding: 0; accent-color: var(--green); }
-.readonly { margin: 0; color: var(--muted); }
-dialog.modal { border: 0; border-radius: 24px; padding: 28px; max-width: 440px; box-shadow: var(--shadow); }
+table.grid td, table.grid th { padding: 12px 8px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+table.grid td strong { font-weight: 700; }
+table.grid tr.is-selected { background: #f3faf6; }
+html[data-theme="dark"] table.grid tr.is-selected { background: #203128; }
+.row-actions { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
+.row-actions a { color: var(--ink); font-weight: 700; text-decoration: none; }
+.row-actions form { display: inline; }
+.row-actions button { background: transparent; color: var(--ink); padding: 0; font-weight: 700; }
+.row-actions button.link-danger { color: #c43838; }
+.pill { display: inline-block; background: #e5f6ea; color: var(--green-dark); border-radius: 999px; padding: 3px 10px; font-size: 12px; font-weight: 700; }
+.pill.off { background: #fdecec; color: #8d2b2b; }
+.module-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
+.module-card {
+  background: var(--white); border-radius: 16px; padding: 18px; box-shadow: var(--shadow);
+  text-decoration: none; color: inherit; display: block;
+}
+.module-card h2 { margin: 0 0 6px; font-size: 20px; }
+.module-card p { margin: 0; color: var(--muted); }
+dialog.modal { border: 0; border-radius: 16px; padding: 24px; max-width: 420px; box-shadow: var(--shadow); }
 dialog.modal::backdrop { background: rgba(16, 32, 24, .45); }
-dialog.modal h2, dialog.modal p { text-align: left; }
 dialog.modal h2 { margin: 0 0 8px; }
-@media (max-width: 800px) {
-  .restrito-shell { grid-template-columns: 1fr; }
+@media (max-width: 980px) {
+  .menu-btn { display: grid; }
+  .app-side { transform: translateX(-105%); transition: transform .2s ease; z-index: 20; }
+  .app-side.is-open { transform: none; }
+  .app-main { margin-left: 0; }
+  .split { grid-template-columns: 1fr; }
+  .app-top { padding: 12px; }
+  .app-content { padding: 8px 12px 36px; }
 }
+"""
+
+
+def flashes_html(aviso: str, erro: str) -> str:
+    parts = []
+    if aviso:
+        parts.append(f'<p class="flash">{esc(aviso)}</p>')
+    if erro:
+        parts.append(f'<p class="flash error">{esc(erro)}</p>')
+    return "".join(parts)
+
+
+def field_error(errors: dict, key: str) -> str:
+    message = (errors or {}).get(key)
+    return f'<span class="error">{esc(message)}</span>' if message else ""
+
+
+def count_label(total: int) -> str:
+    return f"{total} registro(s)"
+
+
+def row_actions(path: str, item_id: int, q: str, confirm: str, extra: str = "") -> str:
+    edit = f'<a href="{esc(path + "?" + urlencode({"acao": "editar", "id": str(item_id), "q": q}))}">Editar</a>'
+    delete = (
+        f'<form method="post" action="{esc(path)}" onsubmit="return confirm(\'{esc(confirm)}\')">'
+        '<input type="hidden" name="acao" value="excluir">'
+        f'<input type="hidden" name="id" value="{item_id}">'
+        f'<input type="hidden" name="q" value="{esc(q)}">'
+        '<button type="submit" class="link-danger">Excluir</button></form>'
+    )
+    return f'<div class="row-actions">{edit}{delete}{extra}</div>'
+
+
+def screen(kicker: str, title: str, lede: str, flashes: str, form_title: str, form: str, list_title: str, total: int, table: str) -> str:
+    return f"""
+<header class="page-head">
+  <p class="eyebrow">{esc(kicker)}</p>
+  <h1>{esc(title)}</h1>
+  <p class="lede">{esc(lede)}</p>
+</header>
+{flashes}
+<div class="split">
+  <section class="panel"><h2>{esc(form_title)}</h2>{form}</section>
+  <section class="panel">
+    <div class="panel-head"><h2>{esc(list_title)}</h2><span>{esc(count_label(total))}</span></div>
+    <div class="grid-wrap">{table}</div>
+  </section>
+</div>
 """
 
 
@@ -583,6 +797,7 @@ def login_form(error: str = "") -> bytes:
     message = f'<p class="error">{esc(error)}</p>' if error else ""
     body = f"""
 <section class="login-card">
+  <img class="login-brand" src="/assets/img/logo.png" alt="Apinil cosméticos">
   <h1>Área restrita</h1>
   <p>Entre com o usuário e a senha da fábrica.</p>
   {message}
@@ -594,6 +809,9 @@ def login_form(error: str = "") -> bytes:
 </section>
 """
     return page("Entrar", body)
+
+
+VIEWER: contextvars.ContextVar[dict | None] = contextvars.ContextVar("viewer", default=None)
 
 
 def current_user(handler: BaseHTTPRequestHandler):
@@ -609,7 +827,7 @@ def current_user(handler: BaseHTTPRequestHandler):
     with connect() as conn:
         row = conn.execute(
             """
-            SELECT u.id, u.username, u.display_name, u.role, u.must_change_password
+            SELECT u.id, u.username, u.display_name, u.role, u.must_change_password, coalesce(u.email, '')
             FROM app_session s
             JOIN app_user u ON u.id = s.user_id
             WHERE s.id = %s AND s.expires_at > now() AND u.active
@@ -624,6 +842,7 @@ def current_user(handler: BaseHTTPRequestHandler):
         "name": row[2],
         "role": row[3],
         "must_change_password": bool(row[4]),
+        "email": row[5],
     }
 
 
@@ -638,11 +857,14 @@ def cards_for(items) -> str:
 
 def cadastros_page() -> bytes:
     body = f"""
-<h1>Cadastros</h1>
-<p>Escolha o cadastro que deseja consultar.</p>
-{cards_for(CADASTROS)}
+<header class="page-head">
+  <p class="eyebrow">CADASTROS</p>
+  <h1>Início</h1>
+  <p class="lede">Escolha o cadastro que deseja consultar. Os registros já gravados continuam disponíveis.</p>
+</header>
+{cards_for(CADASTROS + MODULES)}
 """
-    return page("Cadastros", body, logged=True, current="/restrito/cadastros")
+    return page("Início", body, logged=True, current="/restrito/cadastros")
 
 
 def tipos_url(**params: str) -> str:
@@ -704,123 +926,6 @@ def validate_tipo(nome: str, descricao: str, esfera: str) -> dict[str, str]:
     return errors
 
 
-def tipos_page(*, rows, q: str, aviso: str, erro: str, editor: dict | None) -> bytes:
-    flashes = ""
-    if aviso:
-        flashes += f'<p class="flash">{esc(aviso)}</p>'
-    if erro:
-        flashes += f'<p class="flash error">{esc(erro)}</p>'
-    editor_html = ""
-    if editor:
-        options = ['<option value="">Selecione</option>']
-        for esfera in ESFERAS:
-            selected = " selected" if editor["esfera"] == esfera else ""
-            options.append(f'<option value="{esc(esfera)}"{selected}>{esc(esfera)}</option>')
-        field_errors = editor.get("errors") or {}
-        def field_error(key: str) -> str:
-            message = field_errors.get(key)
-            return f'<span class="error">{esc(message)}</span>' if message else ""
-        editor_html = f"""
-<section class="editor">
-  <h2>{esc(editor["titulo"])}</h2>
-  <form class="record-form" method="post" action="{esc(TIPOS_PATH)}">
-    <input type="hidden" name="acao" value="salvar">
-    <input type="hidden" name="id" value="{esc(editor["id"])}">
-    <input type="hidden" name="q" value="{esc(q)}">
-    <label>Nome<input name="nome" maxlength="30" required value="{esc(editor["nome"])}" autofocus>{field_error("nome")}</label>
-    <label>Descrição<input name="descricao" maxlength="180" required value="{esc(editor["descricao"])}">{field_error("descricao")}</label>
-    <label>Esfera<select name="esfera" required>{"".join(options)}</select>{field_error("esfera")}</label>
-    <div class="form-actions">
-      <button type="submit">Salvar</button>
-      <a class="btn" href="{esc(tipos_url(q=q))}">Cancelar</a>
-    </div>
-  </form>
-</section>
-"""
-    body_rows = []
-    for item_id, nome, descricao, esfera in rows:
-        body_rows.append(
-            "<tr>"
-            f'<td class="col-id"><input type="radio" name="id" value="{item_id}" aria-label="Selecionar {esc(nome)}"></td>'
-            f"<td>{item_id}</td>"
-            f"<td class=\"col-nome\">{esc(nome)}</td>"
-            f"<td>{esc(descricao)}</td>"
-            f"<td class=\"col-esfera\">{esc(esfera)}</td>"
-            "</tr>"
-        )
-    if body_rows:
-        grid_body = "".join(body_rows)
-    else:
-        grid_body = '<tr><td colspan="5">Nenhum tipo de documento encontrado.</td></tr>'
-    quantidade = len(rows)
-    legenda = "1 registro" if quantidade == 1 else f"{quantidade} registros"
-    body = f"""
-<h1>Tipos de Documentos</h1>
-{flashes}
-<div class="crud-toolbar">
-  <form class="search-form" method="get" action="{esc(TIPOS_PATH)}">
-    <input name="q" value="{esc(q)}" placeholder="Nome, descrição ou esfera" aria-label="Pesquisar tipos de documento">
-    <button type="submit">Pesquisar</button>
-  </form>
-  <div class="crud-actions">
-    <a class="btn" href="{esc(tipos_url(acao="incluir", q=q))}">Incluir</a>
-    <button type="submit" class="ghost" form="grade-tipos" name="acao" value="editar" id="editar-tipo">Editar</button>
-    <button type="submit" class="danger" form="grade-tipos" name="acao" value="excluir" id="deletar-tipo">Deletar</button>
-  </div>
-</div>
-{editor_html}
-<section class="grid-card">
-  <p class="grid-count">{esc(legenda)}</p>
-  <form id="grade-tipos" method="post" action="{esc(TIPOS_PATH)}">
-    <input type="hidden" name="q" value="{esc(q)}">
-    <div class="grid-wrap">
-      <table class="grid">
-        <thead>
-          <tr><th></th><th>ID</th><th>Nome</th><th>Descrição</th><th>Esfera</th></tr>
-        </thead>
-        <tbody>{grid_body}</tbody>
-      </table>
-    </div>
-  </form>
-</section>
-<script>
-const grade = document.getElementById("grade-tipos");
-function tipoSelecionado() {{
-  const marcado = grade.querySelector('input[name="id"]:checked');
-  return marcado ? marcado.value : "";
-}}
-document.getElementById("editar-tipo").addEventListener("click", (event) => {{
-  if (!tipoSelecionado()) {{
-    event.preventDefault();
-    alert("Selecione um registro na grade.");
-  }}
-}});
-document.getElementById("deletar-tipo").addEventListener("click", (event) => {{
-  if (!tipoSelecionado()) {{
-    event.preventDefault();
-    alert("Selecione um registro na grade.");
-    return;
-  }}
-  if (!confirm("Deletar o tipo de documento selecionado?")) event.preventDefault();
-}});
-grade.querySelectorAll("tbody tr").forEach((row) => {{
-  row.addEventListener("click", (event) => {{
-    if (event.target.closest("input,a,button")) return;
-    const radio = row.querySelector('input[type="radio"]');
-    if (radio) radio.checked = true;
-  }});
-  row.addEventListener("dblclick", () => {{
-    const radio = row.querySelector('input[type="radio"]');
-    if (!radio) return;
-    radio.checked = true;
-    document.getElementById("editar-tipo").click();
-  }});
-}});
-</script>
-"""
-    return page("Tipos de Documentos", body, logged=True, current=TIPOS_PATH, wide=True)
-
-
 def formas_url(**params: str) -> str:
     clean = {key: value for key, value in params.items() if value}
     if not clean:
@@ -866,113 +971,6 @@ def validate_forma(nome: str, descricao: str) -> dict[str, str]:
     return errors
 
 
-def formas_page(*, rows, q: str, aviso: str, erro: str, editor: dict | None) -> bytes:
-    flashes = ""
-    if aviso:
-        flashes += f'<p class="flash">{esc(aviso)}</p>'
-    if erro:
-        flashes += f'<p class="flash error">{esc(erro)}</p>'
-    editor_html = ""
-    if editor:
-        field_errors = editor.get("errors") or {}
-        def field_error(key: str) -> str:
-            message = field_errors.get(key)
-            return f'<span class="error">{esc(message)}</span>' if message else ""
-        editor_html = f"""
-<section class="editor">
-  <h2>{esc(editor["titulo"])}</h2>
-  <form class="record-form" method="post" action="{esc(FORMAS_PATH)}">
-    <input type="hidden" name="acao" value="salvar">
-    <input type="hidden" name="id" value="{esc(editor["id"])}">
-    <input type="hidden" name="q" value="{esc(q)}">
-    <label>Nome<input name="nome" maxlength="30" required value="{esc(editor["nome"])}" autofocus>{field_error("nome")}</label>
-    <label>Descrição<input name="descricao" maxlength="80" required value="{esc(editor["descricao"])}">{field_error("descricao")}</label>
-    <div class="form-actions">
-      <button type="submit">Salvar</button>
-      <a class="btn" href="{esc(formas_url(q=q))}">Cancelar</a>
-    </div>
-  </form>
-</section>
-"""
-    body_rows = []
-    for item_id, nome, descricao in rows:
-        body_rows.append(
-            "<tr>"
-            f'<td class="col-id"><input type="radio" name="id" value="{item_id}" aria-label="Selecionar {esc(nome)}"></td>'
-            f"<td>{item_id}</td>"
-            f"<td class=\"col-nome\">{esc(nome)}</td>"
-            f"<td>{esc(descricao)}</td>"
-            "</tr>"
-        )
-    grid_body = "".join(body_rows) or '<tr><td colspan="4">Nenhuma forma de pagamento encontrada.</td></tr>'
-    quantidade = len(rows)
-    legenda = "1 registro" if quantidade == 1 else f"{quantidade} registros"
-    body = f"""
-<h1>Formas de Pagamentos</h1>
-{flashes}
-<div class="crud-toolbar">
-  <form class="search-form" method="get" action="{esc(FORMAS_PATH)}">
-    <input name="q" value="{esc(q)}" placeholder="Nome ou descrição" aria-label="Pesquisar formas de pagamento">
-    <button type="submit">Pesquisar</button>
-  </form>
-  <div class="crud-actions">
-    <a class="btn" href="{esc(formas_url(acao="incluir", q=q))}">Incluir</a>
-    <button type="submit" class="ghost" form="grade-formas" name="acao" value="editar" id="editar-forma">Editar</button>
-    <button type="submit" class="danger" form="grade-formas" name="acao" value="excluir" id="deletar-forma">Deletar</button>
-  </div>
-</div>
-{editor_html}
-<section class="grid-card">
-  <p class="grid-count">{esc(legenda)}</p>
-  <form id="grade-formas" method="post" action="{esc(FORMAS_PATH)}">
-    <input type="hidden" name="q" value="{esc(q)}">
-    <div class="grid-wrap">
-      <table class="grid">
-        <thead>
-          <tr><th></th><th>ID</th><th>Nome</th><th>Descrição</th></tr>
-        </thead>
-        <tbody>{grid_body}</tbody>
-      </table>
-    </div>
-  </form>
-</section>
-<script>
-const grade = document.getElementById("grade-formas");
-function formaSelecionada() {{
-  const marcado = grade.querySelector('input[name="id"]:checked');
-  return marcado ? marcado.value : "";
-}}
-document.getElementById("editar-forma").addEventListener("click", (event) => {{
-  if (!formaSelecionada()) {{
-    event.preventDefault();
-    alert("Selecione um registro na grade.");
-  }}
-}});
-document.getElementById("deletar-forma").addEventListener("click", (event) => {{
-  if (!formaSelecionada()) {{
-    event.preventDefault();
-    alert("Selecione um registro na grade.");
-    return;
-  }}
-  if (!confirm("Deletar a forma de pagamento selecionada?")) event.preventDefault();
-}});
-grade.querySelectorAll("tbody tr").forEach((row) => {{
-  row.addEventListener("click", (event) => {{
-    if (event.target.closest("input,a,button")) return;
-    const radio = row.querySelector('input[type="radio"]');
-    if (radio) radio.checked = true;
-  }});
-  row.addEventListener("dblclick", () => {{
-    const radio = row.querySelector('input[type="radio"]');
-    if (!radio) return;
-    radio.checked = true;
-    document.getElementById("editar-forma").click();
-  }});
-}});
-</script>
-"""
-    return page("Formas de Pagamentos", body, logged=True, current=FORMAS_PATH, wide=True)
-
 
 def condicoes_url(**params: str) -> str:
     clean = {key: value for key, value in params.items() if value}
@@ -1016,113 +1014,6 @@ def validate_condicao(qtde: str, nome: str) -> dict[str, str]:
         errors["nome"] = "O nome pode ter no máximo 40 caracteres."
     return errors
 
-
-def condicoes_page(*, rows, q: str, aviso: str, erro: str, editor: dict | None) -> bytes:
-    flashes = ""
-    if aviso:
-        flashes += f'<p class="flash">{esc(aviso)}</p>'
-    if erro:
-        flashes += f'<p class="flash error">{esc(erro)}</p>'
-    editor_html = ""
-    if editor:
-        field_errors = editor.get("errors") or {}
-        def field_error(key: str) -> str:
-            message = field_errors.get(key)
-            return f'<span class="error">{esc(message)}</span>' if message else ""
-        editor_html = f"""
-<section class="editor">
-  <h2>{esc(editor["titulo"])}</h2>
-  <form class="record-form" method="post" action="{esc(CONDICOES_PATH)}">
-    <input type="hidden" name="acao" value="salvar">
-    <input type="hidden" name="id" value="{esc(editor["id"])}">
-    <input type="hidden" name="q" value="{esc(q)}">
-    <label>Qtde Parcelas<input name="qtde_parcelas" inputmode="numeric" maxlength="2" required value="{esc(editor["qtde_parcelas"])}" autofocus>{field_error("qtde_parcelas")}</label>
-    <label>Nome<input name="nome" maxlength="40" required value="{esc(editor["nome"])}">{field_error("nome")}</label>
-    <div class="form-actions">
-      <button type="submit">Salvar</button>
-      <a class="btn" href="{esc(condicoes_url(q=q))}">Cancelar</a>
-    </div>
-  </form>
-</section>
-"""
-    body_rows = []
-    for item_id, qtde, nome in rows:
-        body_rows.append(
-            "<tr>"
-            f'<td class="col-id"><input type="radio" name="id" value="{item_id}" aria-label="Selecionar {esc(nome)}"></td>'
-            f"<td>{item_id}</td>"
-            f"<td>{qtde}</td>"
-            f"<td class=\"col-nome\">{esc(nome)}</td>"
-            "</tr>"
-        )
-    grid_body = "".join(body_rows) or '<tr><td colspan="4">Nenhuma condição de pagamento encontrada.</td></tr>'
-    quantidade = len(rows)
-    legenda = "1 registro" if quantidade == 1 else f"{quantidade} registros"
-    body = f"""
-<h1>Condições de Pagamentos</h1>
-{flashes}
-<div class="crud-toolbar">
-  <form class="search-form" method="get" action="{esc(CONDICOES_PATH)}">
-    <input name="q" value="{esc(q)}" placeholder="Nome ou quantidade de parcelas" aria-label="Pesquisar condições de pagamento">
-    <button type="submit">Pesquisar</button>
-  </form>
-  <div class="crud-actions">
-    <a class="btn" href="{esc(condicoes_url(acao="incluir", q=q))}">Incluir</a>
-    <button type="submit" class="ghost" form="grade-condicoes" name="acao" value="editar" id="editar-condicao">Editar</button>
-    <button type="submit" class="danger" form="grade-condicoes" name="acao" value="excluir" id="deletar-condicao">Deletar</button>
-  </div>
-</div>
-{editor_html}
-<section class="grid-card">
-  <p class="grid-count">{esc(legenda)}</p>
-  <form id="grade-condicoes" method="post" action="{esc(CONDICOES_PATH)}">
-    <input type="hidden" name="q" value="{esc(q)}">
-    <div class="grid-wrap">
-      <table class="grid">
-        <thead>
-          <tr><th></th><th>ID</th><th>Qtde Parcelas</th><th>Nome</th></tr>
-        </thead>
-        <tbody>{grid_body}</tbody>
-      </table>
-    </div>
-  </form>
-</section>
-<script>
-const grade = document.getElementById("grade-condicoes");
-function condicaoSelecionada() {{
-  const marcado = grade.querySelector('input[name="id"]:checked');
-  return marcado ? marcado.value : "";
-}}
-document.getElementById("editar-condicao").addEventListener("click", (event) => {{
-  if (!condicaoSelecionada()) {{
-    event.preventDefault();
-    alert("Selecione um registro na grade.");
-  }}
-}});
-document.getElementById("deletar-condicao").addEventListener("click", (event) => {{
-  if (!condicaoSelecionada()) {{
-    event.preventDefault();
-    alert("Selecione um registro na grade.");
-    return;
-  }}
-  if (!confirm("Deletar a condição de pagamento selecionada?")) event.preventDefault();
-}});
-grade.querySelectorAll("tbody tr").forEach((row) => {{
-  row.addEventListener("click", (event) => {{
-    if (event.target.closest("input,a,button")) return;
-    const radio = row.querySelector('input[type="radio"]');
-    if (radio) radio.checked = true;
-  }});
-  row.addEventListener("dblclick", () => {{
-    const radio = row.querySelector('input[type="radio"]');
-    if (!radio) return;
-    radio.checked = true;
-    document.getElementById("editar-condicao").click();
-  }});
-}});
-</script>
-"""
-    return page("Condições de Pagamentos", body, logged=True, current=CONDICOES_PATH, wide=True)
 
 
 def centros_url(**params: str) -> str:
@@ -1174,118 +1065,6 @@ def validate_centro(codigo: str, nome: str, descricao: str) -> dict[str, str]:
         errors["descricao"] = "A descrição pode ter no máximo 200 caracteres."
     return errors
 
-
-def centros_page(*, rows, q: str, aviso: str, erro: str, editor: dict | None) -> bytes:
-    flashes = ""
-    if aviso:
-        flashes += f'<p class="flash">{esc(aviso)}</p>'
-    if erro:
-        flashes += f'<p class="flash error">{esc(erro)}</p>'
-    editor_html = ""
-    if editor:
-        field_errors = editor.get("errors") or {}
-
-        def field_error(key: str) -> str:
-            message = field_errors.get(key)
-            return f'<span class="error">{esc(message)}</span>' if message else ""
-
-        editor_html = f"""
-<section class="editor">
-  <h2>{esc(editor["titulo"])}</h2>
-  <form class="record-form" method="post" action="{esc(CENTROS_PATH)}">
-    <input type="hidden" name="acao" value="salvar">
-    <input type="hidden" name="id" value="{esc(editor["id"])}">
-    <input type="hidden" name="q" value="{esc(q)}">
-    <label>ID<input value="{esc(editor["id"])}" readonly tabindex="-1" placeholder="Gerado ao salvar"></label>
-    <label>Código reduzido<input name="codigo_reduzido" maxlength="20" required value="{esc(editor["codigo_reduzido"])}" autocomplete="off" autofocus>{field_error("codigo_reduzido")}</label>
-    <label>Nome<input name="nome" maxlength="80" required value="{esc(editor["nome"])}">{field_error("nome")}</label>
-    <label>Descrição<textarea name="descricao" maxlength="200" required>{esc(editor["descricao"])}</textarea>{field_error("descricao")}</label>
-    <div class="form-actions">
-      <button type="submit">Salvar</button>
-      <a class="btn" href="{esc(centros_url(q=q))}">Cancelar</a>
-    </div>
-  </form>
-</section>
-"""
-    body_rows = []
-    for item_id, codigo, nome, descricao in rows:
-        body_rows.append(
-            "<tr>"
-            f'<td class="col-id"><input type="radio" name="id" value="{item_id}" aria-label="Selecionar {esc(codigo)}"></td>'
-            f"<td>{item_id}</td>"
-            f'<td class="col-codigo">{esc(codigo)}</td>'
-            f"<td>{esc(nome)}</td>"
-            f"<td>{esc(descricao) if descricao else '—'}</td>"
-            "</tr>"
-        )
-    grid_body = "".join(body_rows) or '<tr><td colspan="5">Nenhum centro de custo encontrado.</td></tr>'
-    quantidade = len(rows)
-    legenda = "1 registro" if quantidade == 1 else f"{quantidade} registros"
-    body = f"""
-<h1>Centros de Custo</h1>
-{flashes}
-<div class="crud-toolbar">
-  <form class="search-form" method="get" action="{esc(CENTROS_PATH)}">
-    <input name="q" value="{esc(q)}" placeholder="Código, nome ou descrição" aria-label="Pesquisar centros de custo">
-    <button type="submit">Pesquisar</button>
-  </form>
-  <div class="crud-actions">
-    <a class="btn" href="{esc(centros_url(acao="incluir", q=q))}">Inserir</a>
-    <button type="submit" class="ghost" form="grade-centros" name="acao" value="editar" id="editar-centro">Editar</button>
-    <button type="submit" class="danger" form="grade-centros" name="acao" value="excluir" id="excluir-centro">Excluir</button>
-  </div>
-</div>
-{editor_html}
-<section class="grid-card">
-  <p class="grid-count">{esc(legenda)}</p>
-  <form id="grade-centros" method="post" action="{esc(CENTROS_PATH)}">
-    <input type="hidden" name="q" value="{esc(q)}">
-    <div class="grid-wrap">
-      <table class="grid">
-        <thead>
-          <tr><th></th><th>ID</th><th>Código reduzido</th><th>Nome</th><th>Descrição</th></tr>
-        </thead>
-        <tbody>{grid_body}</tbody>
-      </table>
-    </div>
-  </form>
-</section>
-<script>
-const grade = document.getElementById("grade-centros");
-function centroSelecionado() {{
-  const marcado = grade.querySelector('input[name="id"]:checked');
-  return marcado ? marcado.value : "";
-}}
-document.getElementById("editar-centro").addEventListener("click", (event) => {{
-  if (!centroSelecionado()) {{
-    event.preventDefault();
-    alert("Selecione um registro na grade.");
-  }}
-}});
-document.getElementById("excluir-centro").addEventListener("click", (event) => {{
-  if (!centroSelecionado()) {{
-    event.preventDefault();
-    alert("Selecione um registro na grade.");
-    return;
-  }}
-  if (!confirm("Excluir o centro de custo selecionado?")) event.preventDefault();
-}});
-grade.querySelectorAll("tbody tr").forEach((row) => {{
-  row.addEventListener("click", (event) => {{
-    if (event.target.closest("input,a,button")) return;
-    const radio = row.querySelector('input[type="radio"]');
-    if (radio) radio.checked = true;
-  }});
-  row.addEventListener("dblclick", () => {{
-    const radio = row.querySelector('input[type="radio"]');
-    if (!radio) return;
-    radio.checked = true;
-    document.getElementById("editar-centro").click();
-  }});
-}});
-</script>
-"""
-    return page("Centros de Custo", body, logged=True, current=CENTROS_PATH, wide=True)
 
 
 def is_admin(user) -> bool:
@@ -1364,14 +1143,184 @@ def validate_usuario(nome: str, login: str, email: str, senha: str, confirmar: s
     return errors
 
 
+
+def tipos_page(*, rows, q: str, aviso: str, erro: str, editor: dict | None) -> bytes:
+    if editor is None:
+        editor = {"titulo": "Novo tipo de documento", "id": "", "nome": "", "descricao": "", "esfera": "", "errors": {}}
+    creating = not editor.get("id")
+    options = ['<option value="">Selecione</option>']
+    for esfera in ESFERAS:
+        selected = " selected" if editor.get("esfera") == esfera else ""
+        options.append(f'<option value="{esc(esfera)}"{selected}>{esc(esfera)}</option>')
+    errors = editor.get("errors") or {}
+    cancel = f'<a class="text-link" href="{esc(tipos_url(q=q))}">Cancelar</a>' if not creating else ""
+    form = f"""
+<form class="record-form" method="post" action="{esc(TIPOS_PATH)}">
+  <input type="hidden" name="acao" value="salvar">
+  <input type="hidden" name="id" value="{esc(editor.get("id", ""))}">
+  <input type="hidden" name="q" value="{esc(q)}">
+  <label>Nome<input name="nome" maxlength="30" required value="{esc(editor.get("nome", ""))}" autofocus>{field_error(errors, "nome")}</label>
+  <label>Descrição<input name="descricao" maxlength="180" required value="{esc(editor.get("descricao", ""))}">{field_error(errors, "descricao")}</label>
+  <label>Esfera<select name="esfera" required>{"".join(options)}</select>{field_error(errors, "esfera")}</label>
+  <button type="submit">{"Criar tipo de documento" if creating else "Salvar alterações"}</button>
+  {cancel}
+</form>
+"""
+    body_rows = []
+    for item_id, nome, descricao, esfera in rows:
+        selected = " is-selected" if str(item_id) == str(editor.get("id") or "") else ""
+        body_rows.append(
+            f'<tr class="{selected.strip()}">'
+            f"<td><strong>{esc(nome)}</strong></td><td>{esc(descricao)}</td><td>{esc(esfera)}</td>"
+            f"<td>{row_actions(TIPOS_PATH, item_id, q, 'Excluir este tipo de documento?')}</td></tr>"
+        )
+    table = (
+        "<table class=\"grid\"><thead><tr><th>Nome</th><th>Descrição</th><th>Esfera</th><th>Ações</th></tr></thead><tbody>"
+        + ("".join(body_rows) or '<tr><td colspan="4">Nenhum tipo de documento encontrado.</td></tr>')
+        + "</tbody></table>"
+    )
+    body = screen(
+        "CADASTROS", "Tipos de Documentos", "Tipos usados em títulos e lançamentos.",
+        flashes_html(aviso, erro), editor["titulo"], form, "Tipos cadastrados", len(rows), table,
+    )
+    return page(
+        "Tipos de Documentos", body, logged=True, current=TIPOS_PATH, wide=True,
+        search={"action": TIPOS_PATH, "q": q, "placeholder": "Nome, descrição ou esfera"},
+        action={"href": tipos_url(acao="incluir", q=q), "label": "+ Novo tipo"},
+    )
+
+
+def formas_page(*, rows, q: str, aviso: str, erro: str, editor: dict | None) -> bytes:
+    if editor is None:
+        editor = {"titulo": "Nova forma de pagamento", "id": "", "nome": "", "descricao": "", "errors": {}}
+    creating = not editor.get("id")
+    errors = editor.get("errors") or {}
+    cancel = f'<a class="text-link" href="{esc(formas_url(q=q))}">Cancelar</a>' if not creating else ""
+    form = f"""
+<form class="record-form" method="post" action="{esc(FORMAS_PATH)}">
+  <input type="hidden" name="acao" value="salvar">
+  <input type="hidden" name="id" value="{esc(editor.get("id", ""))}">
+  <input type="hidden" name="q" value="{esc(q)}">
+  <label>Nome<input name="nome" maxlength="30" required value="{esc(editor.get("nome", ""))}" autofocus>{field_error(errors, "nome")}</label>
+  <label>Descrição<input name="descricao" maxlength="80" required value="{esc(editor.get("descricao", ""))}">{field_error(errors, "descricao")}</label>
+  <button type="submit">{"Criar forma de pagamento" if creating else "Salvar alterações"}</button>
+  {cancel}
+</form>
+"""
+    body_rows = []
+    for item_id, nome, descricao in rows:
+        selected = " is-selected" if str(item_id) == str(editor.get("id") or "") else ""
+        body_rows.append(
+            f'<tr class="{selected.strip()}">'
+            f"<td><strong>{esc(nome)}</strong></td><td>{esc(descricao)}</td>"
+            f"<td>{row_actions(FORMAS_PATH, item_id, q, 'Excluir esta forma de pagamento?')}</td></tr>"
+        )
+    table = (
+        "<table class=\"grid\"><thead><tr><th>Nome</th><th>Descrição</th><th>Ações</th></tr></thead><tbody>"
+        + ("".join(body_rows) or '<tr><td colspan="3">Nenhuma forma de pagamento encontrada.</td></tr>')
+        + "</tbody></table>"
+    )
+    body = screen(
+        "CADASTROS", "Formas de Pagamentos", "Meios usados para pagar e receber.",
+        flashes_html(aviso, erro), editor["titulo"], form, "Formas cadastradas", len(rows), table,
+    )
+    return page(
+        "Formas de Pagamentos", body, logged=True, current=FORMAS_PATH, wide=True,
+        search={"action": FORMAS_PATH, "q": q, "placeholder": "Nome ou descrição"},
+        action={"href": formas_url(acao="incluir", q=q), "label": "+ Nova forma"},
+    )
+
+
+def condicoes_page(*, rows, q: str, aviso: str, erro: str, editor: dict | None) -> bytes:
+    if editor is None:
+        editor = {"titulo": "Nova condição de pagamento", "id": "", "qtde_parcelas": "", "nome": "", "errors": {}}
+    creating = not editor.get("id")
+    errors = editor.get("errors") or {}
+    cancel = f'<a class="text-link" href="{esc(condicoes_url(q=q))}">Cancelar</a>' if not creating else ""
+    form = f"""
+<form class="record-form" method="post" action="{esc(CONDICOES_PATH)}">
+  <input type="hidden" name="acao" value="salvar">
+  <input type="hidden" name="id" value="{esc(editor.get("id", ""))}">
+  <input type="hidden" name="q" value="{esc(q)}">
+  <label>Qtde parcelas<input name="qtde_parcelas" inputmode="numeric" maxlength="2" required value="{esc(editor.get("qtde_parcelas", ""))}" autofocus>{field_error(errors, "qtde_parcelas")}</label>
+  <label>Nome<input name="nome" maxlength="40" required value="{esc(editor.get("nome", ""))}">{field_error(errors, "nome")}</label>
+  <button type="submit">{"Criar condição" if creating else "Salvar alterações"}</button>
+  {cancel}
+</form>
+"""
+    body_rows = []
+    for item_id, qtde, nome in rows:
+        selected = " is-selected" if str(item_id) == str(editor.get("id") or "") else ""
+        body_rows.append(
+            f'<tr class="{selected.strip()}">'
+            f"<td><strong>{esc(nome)}</strong></td><td>{qtde}</td>"
+            f"<td>{row_actions(CONDICOES_PATH, item_id, q, 'Excluir esta condição de pagamento?')}</td></tr>"
+        )
+    table = (
+        "<table class=\"grid\"><thead><tr><th>Nome</th><th>Parcelas</th><th>Ações</th></tr></thead><tbody>"
+        + ("".join(body_rows) or '<tr><td colspan="3">Nenhuma condição de pagamento encontrada.</td></tr>')
+        + "</tbody></table>"
+    )
+    body = screen(
+        "CADASTROS", "Condições de Pagamentos", "Prazos e parcelas das negociações.",
+        flashes_html(aviso, erro), editor["titulo"], form, "Condições cadastradas", len(rows), table,
+    )
+    return page(
+        "Condições de Pagamentos", body, logged=True, current=CONDICOES_PATH, wide=True,
+        search={"action": CONDICOES_PATH, "q": q, "placeholder": "Nome ou quantidade de parcelas"},
+        action={"href": condicoes_url(acao="incluir", q=q), "label": "+ Nova condição"},
+    )
+
+
+def centros_page(*, rows, q: str, aviso: str, erro: str, editor: dict | None) -> bytes:
+    if editor is None:
+        editor = {"titulo": "Novo centro de custo", "id": "", "codigo_reduzido": "", "nome": "", "descricao": "", "errors": {}}
+    creating = not editor.get("id")
+    errors = editor.get("errors") or {}
+    cancel = f'<a class="text-link" href="{esc(centros_url(q=q))}">Cancelar</a>' if not creating else ""
+    ident = esc(editor.get("id") or "")
+    form = f"""
+<form class="record-form" method="post" action="{esc(CENTROS_PATH)}">
+  <input type="hidden" name="acao" value="salvar">
+  <input type="hidden" name="id" value="{ident}">
+  <input type="hidden" name="q" value="{esc(q)}">
+  <label>ID<input value="{ident}" readonly tabindex="-1" placeholder="Gerado ao salvar"></label>
+  <label>Código reduzido<input name="codigo_reduzido" maxlength="20" required value="{esc(editor.get("codigo_reduzido", ""))}" autocomplete="off" autofocus>{field_error(errors, "codigo_reduzido")}</label>
+  <label>Nome<input name="nome" maxlength="80" required value="{esc(editor.get("nome", ""))}">{field_error(errors, "nome")}</label>
+  <label>Descrição<textarea name="descricao" maxlength="200" required>{esc(editor.get("descricao", ""))}</textarea>{field_error(errors, "descricao")}</label>
+  <button type="submit">{"Criar centro de custo" if creating else "Salvar alterações"}</button>
+  {cancel}
+</form>
+"""
+    body_rows = []
+    for item_id, codigo, nome, descricao in rows:
+        selected = " is-selected" if str(item_id) == str(editor.get("id") or "") else ""
+        body_rows.append(
+            f'<tr class="{selected.strip()}">'
+            f"<td><strong>{esc(codigo)}</strong></td><td>{esc(nome)}</td><td>{esc(descricao) if descricao else '—'}</td>"
+            f"<td>{row_actions(CENTROS_PATH, item_id, q, 'Excluir este centro de custo?')}</td></tr>"
+        )
+    table = (
+        "<table class=\"grid\"><thead><tr><th>Código</th><th>Nome</th><th>Descrição</th><th>Ações</th></tr></thead><tbody>"
+        + ("".join(body_rows) or '<tr><td colspan="4">Nenhum centro de custo encontrado.</td></tr>')
+        + "</tbody></table>"
+    )
+    body = screen(
+        "CADASTROS", "Centros de Custo", "Centros usados para classificar gastos e receitas.",
+        flashes_html(aviso, erro), editor["titulo"], form, "Centros cadastrados", len(rows), table,
+    )
+    return page(
+        "Centros de Custo", body, logged=True, current=CENTROS_PATH, wide=True,
+        search={"action": CENTROS_PATH, "q": q, "placeholder": "Código, nome ou descrição"},
+        action={"href": centros_url(acao="incluir", q=q), "label": "+ Novo centro"},
+    )
+
+
 def usuarios_page(*, rows, q: str, aviso: str, erro: str, editor: dict | None, current_id: int) -> bytes:
-    flashes = ""
-    if aviso and aviso != "Usuário incluído com sucesso.":
-        flashes += f'<p class="flash">{esc(aviso)}</p>'
-    if erro:
-        flashes += f'<p class="flash error">{esc(erro)}</p>'
     popup = ""
+    shown = aviso
     if aviso == "Usuário incluído com sucesso.":
+        shown = ""
         popup = f"""
 <dialog class="modal" open>
   <h2>Usuário incluído</h2>
@@ -1382,204 +1331,106 @@ def usuarios_page(*, rows, q: str, aviso: str, erro: str, editor: dict | None, c
   </form>
 </dialog>
 """
-    editor_html = ""
-    if editor:
-        field_errors = editor.get("errors") or {}
-
-        def field_error(key: str) -> str:
-            message = field_errors.get(key)
-            return f'<span class="error">{esc(message)}</span>' if message else ""
-
-        if editor["modo"] == "incluir":
-            checked = " checked" if editor.get("administrador") else ""
-            editor_html = f"""
-<section class="editor">
-  <h2>Incluir usuário</h2>
-  <form class="record-form" method="post" action="{esc(USUARIOS_PATH)}">
-    <input type="hidden" name="acao" value="salvar">
-    <input type="hidden" name="q" value="{esc(q)}">
-    <label>Nome<input name="nome" maxlength="80" required value="{esc(editor["nome"])}" autofocus>{field_error("nome")}</label>
-    <label>Login<input name="login" maxlength="40" required value="{esc(editor["login"])}" autocomplete="off">{field_error("login")}</label>
-    <label>E-mail<input name="email" type="email" maxlength="120" required value="{esc(editor["email"])}" autocomplete="off">{field_error("email")}</label>
-    <label>Senha<input name="senha" type="password" required autocomplete="new-password">{field_error("senha")}</label>
-    <label>Confirmar senha<input name="confirmar" type="password" required autocomplete="new-password">{field_error("confirmar")}</label>
-    <label class="checkline"><input type="checkbox" name="administrador" value="1"{checked}>Tornar administrador</label>
-    <p class="readonly">No primeiro acesso, o usuário será obrigado a trocar a senha.</p>
-    <div class="form-actions">
-      <button type="submit">Salvar</button>
-      <a class="btn" href="{esc(usuarios_url(q=q))}">Cancelar</a>
-    </div>
-  </form>
-</section>
+    if editor is None:
+        editor = {"modo": "incluir", "nome": "", "login": "", "email": "", "administrador": False, "errors": {}}
+    creating = editor.get("modo") == "incluir"
+    errors = editor.get("errors") or {}
+    cancel = f'<a class="text-link" href="{esc(usuarios_url(q=q))}">Cancelar</a>' if not creating else ""
+    if creating:
+        checked = " checked" if editor.get("administrador") else ""
+        form = f"""
+<form class="record-form" method="post" action="{esc(USUARIOS_PATH)}">
+  <input type="hidden" name="acao" value="salvar">
+  <input type="hidden" name="q" value="{esc(q)}">
+  <label>Nome<input name="nome" maxlength="80" required value="{esc(editor.get("nome", ""))}" autofocus>{field_error(errors, "nome")}</label>
+  <label>Login<input name="login" maxlength="40" required value="{esc(editor.get("login", ""))}" autocomplete="off">{field_error(errors, "login")}</label>
+  <label>E-mail<input name="email" type="email" maxlength="120" required value="{esc(editor.get("email", ""))}" autocomplete="off">{field_error(errors, "email")}</label>
+  <label>Senha<input name="senha" type="password" required autocomplete="new-password">{field_error(errors, "senha")}</label>
+  <label>Confirmar senha<input name="confirmar" type="password" required autocomplete="new-password">{field_error(errors, "confirmar")}</label>
+  <label class="checkline"><span>Tornar administrador</span><input type="checkbox" name="administrador" value="1"{checked}></label>
+  <p class="lede">No primeiro acesso, o usuário será obrigado a trocar a senha.</p>
+  <button type="submit">Criar usuário</button>
+</form>
 """
-        else:
-            editor_html = f"""
-<section class="editor">
-  <h2>Editar usuário</h2>
-  <form class="record-form" method="post" action="{esc(USUARIOS_PATH)}">
-    <input type="hidden" name="acao" value="salvar">
-    <input type="hidden" name="id" value="{esc(editor["id"])}">
-    <input type="hidden" name="q" value="{esc(q)}">
-    <p class="readonly">ID {esc(editor["id"])}</p>
-    <label>Nome<input name="nome" maxlength="80" required value="{esc(editor["nome"])}" autofocus>{field_error("nome")}</label>
-    <label>Login<input name="login" maxlength="40" required value="{esc(editor["login"])}" autocomplete="off">{field_error("login")}</label>
-    <p class="readonly">E-mail {esc(editor["email"] or "—")}. O e-mail e a senha não podem ser alterados aqui.</p>
-    <div class="form-actions">
-      <button type="submit">Salvar</button>
-      <a class="btn" href="{esc(usuarios_url(q=q))}">Cancelar</a>
-    </div>
-  </form>
-</section>
+        form_title = "Novo usuário"
+    else:
+        form = f"""
+<form class="record-form" method="post" action="{esc(USUARIOS_PATH)}">
+  <input type="hidden" name="acao" value="salvar">
+  <input type="hidden" name="id" value="{esc(editor.get("id", ""))}">
+  <input type="hidden" name="q" value="{esc(q)}">
+  <label>ID<input value="{esc(editor.get("id", ""))}" readonly tabindex="-1"></label>
+  <label>Nome<input name="nome" maxlength="80" required value="{esc(editor.get("nome", ""))}" autofocus>{field_error(errors, "nome")}</label>
+  <label>Login<input name="login" maxlength="40" required value="{esc(editor.get("login", ""))}" autocomplete="off">{field_error(errors, "login")}</label>
+  <p class="lede">E-mail {esc(editor.get("email") or "—")}. O e-mail e a senha não mudam neste formulário.</p>
+  <button type="submit">Salvar alterações</button>
+  {cancel}
+</form>
 """
+        form_title = "Editar usuário"
     body_rows = []
     for item_id, nome, login, email, role, active, must_change in rows:
         admin = role in ("master", "admin")
-        body_rows.append(
-            "<tr>"
-            f'<td class="col-id"><input type="radio" name="id" value="{item_id}"'
-            f' data-active="{1 if active else 0}" data-admin="{1 if admin else 0}"'
-            f' data-self="{1 if item_id == current_id else 0}"'
-            f' aria-label="Selecionar {esc(login)}"></td>'
-            f"<td>{item_id}</td>"
-            f"<td>{esc(nome)}</td>"
-            f"<td>{esc(login)}</td>"
-            f"<td>{esc(email or '—')}</td>"
-            f"<td>{'Sim' if admin else 'Não'}</td>"
-            f"<td>{'Ativo' if active else 'Bloqueado'}</td>"
-            f"<td>{'Pendente' if must_change else 'Não'}</td>"
-            "</tr>"
+        selected = " is-selected" if str(item_id) == str(editor.get("id") or "") else ""
+        pill = '<span class="pill">Ativo</span>' if active else '<span class="pill off">Bloqueado</span>'
+        extra = ""
+        if item_id != current_id:
+            block_label = "Bloquear" if active else "Desbloquear"
+            extra += (
+                f'<form method="post" action="{esc(USUARIOS_PATH)}" onsubmit="return confirm(\'{block_label} este usuário?\')">'
+                '<input type="hidden" name="acao" value="bloquear">'
+                f'<input type="hidden" name="id" value="{item_id}">'
+                f'<input type="hidden" name="q" value="{esc(q)}">'
+                f'<button type="submit">{block_label}</button></form>'
+            )
+        admin_label = "Remover administrador" if admin else "Tornar administrador"
+        extra += (
+            f'<form method="post" action="{esc(USUARIOS_PATH)}">'
+            '<input type="hidden" name="acao" value="administrador">'
+            f'<input type="hidden" name="id" value="{item_id}">'
+            f'<input type="hidden" name="q" value="{esc(q)}">'
+            f'<button type="submit">{admin_label}</button></form>'
+            f'<form method="post" action="{esc(USUARIOS_PATH)}" onsubmit="return confirm(\'Pedir a troca de senha no próximo acesso?\')">'
+            '<input type="hidden" name="acao" value="senha">'
+            f'<input type="hidden" name="id" value="{item_id}">'
+            f'<input type="hidden" name="q" value="{esc(q)}">'
+            '<button type="submit">Trocar senha</button></form>'
         )
-    grid_body = "".join(body_rows) or '<tr><td colspan="8">Nenhum usuário encontrado.</td></tr>'
-    quantidade = len(rows)
-    legenda = "1 registro" if quantidade == 1 else f"{quantidade} registros"
-    body = f"""
-<h1>Usuários</h1>
-{flashes}
-{popup}
-<div class="crud-toolbar">
-  <form class="search-form" method="get" action="{esc(USUARIOS_PATH)}">
-    <input name="q" value="{esc(q)}" placeholder="Nome, login ou e-mail" aria-label="Pesquisar usuários">
-    <button type="submit">Pesquisar</button>
-  </form>
-  <div class="crud-actions">
-    <a class="btn" href="{esc(usuarios_url(acao="incluir", q=q))}">Inserir</a>
-    <button type="submit" class="ghost" form="grade-usuarios" name="acao" value="editar" id="editar-usuario">Editar</button>
-    <button type="submit" class="ghost" form="grade-usuarios" name="acao" value="bloquear" id="bloquear-usuario">Bloquear</button>
-    <button type="submit" class="danger" form="grade-usuarios" name="acao" value="excluir" id="excluir-usuario">Excluir</button>
-    <button type="submit" class="ghost" form="grade-usuarios" name="acao" value="administrador" id="admin-usuario">Tornar administrador</button>
-    <button type="submit" class="ghost" form="grade-usuarios" name="acao" value="senha" id="senha-usuario">Solicitar troca de senha</button>
-  </div>
-</div>
-{editor_html}
-<section class="grid-card">
-  <p class="grid-count">{esc(legenda)}</p>
-  <form id="grade-usuarios" method="post" action="{esc(USUARIOS_PATH)}">
-    <input type="hidden" name="q" value="{esc(q)}">
-    <div class="grid-wrap">
-      <table class="grid">
-        <thead>
-          <tr><th></th><th>ID</th><th>Nome</th><th>Login</th><th>E-mail</th><th>Administrador</th><th>Situação</th><th>Troca de senha</th></tr>
-        </thead>
-        <tbody>{grid_body}</tbody>
-      </table>
-    </div>
-  </form>
-</section>
-<script>
-const grade = document.getElementById("grade-usuarios");
-function usuarioSelecionado() {{
-  return grade.querySelector('input[name="id"]:checked');
-}}
-function atualizarAcoes() {{
-  const marcado = usuarioSelecionado();
-  const bloquear = document.getElementById("bloquear-usuario");
-  const admin = document.getElementById("admin-usuario");
-  if (!marcado) {{
-    bloquear.textContent = "Bloquear";
-    admin.textContent = "Tornar administrador";
-    return;
-  }}
-  bloquear.textContent = marcado.dataset.active === "1" ? "Bloquear" : "Desbloquear";
-  admin.textContent = marcado.dataset.admin === "1" ? "Remover administrador" : "Tornar administrador";
-}}
-grade.addEventListener("change", atualizarAcoes);
-document.getElementById("editar-usuario").addEventListener("click", (event) => {{
-  if (!usuarioSelecionado()) {{
-    event.preventDefault();
-    alert("Selecione um registro na grade.");
-  }}
-}});
-document.getElementById("bloquear-usuario").addEventListener("click", (event) => {{
-  const marcado = usuarioSelecionado();
-  if (!marcado) {{
-    event.preventDefault();
-    alert("Selecione um registro na grade.");
-    return;
-  }}
-  if (marcado.dataset.self === "1") {{
-    event.preventDefault();
-    alert("Você não pode bloquear o próprio usuário.");
-    return;
-  }}
-  const acao = marcado.dataset.active === "1" ? "Bloquear" : "Desbloquear";
-  if (!confirm(acao + " o usuário selecionado?")) event.preventDefault();
-}});
-document.getElementById("excluir-usuario").addEventListener("click", (event) => {{
-  const marcado = usuarioSelecionado();
-  if (!marcado) {{
-    event.preventDefault();
-    alert("Selecione um registro na grade.");
-    return;
-  }}
-  if (marcado.dataset.self === "1") {{
-    event.preventDefault();
-    alert("Você não pode excluir o próprio usuário.");
-    return;
-  }}
-  if (!confirm("Excluir o usuário selecionado?")) event.preventDefault();
-}});
-document.getElementById("admin-usuario").addEventListener("click", (event) => {{
-  if (!usuarioSelecionado()) {{
-    event.preventDefault();
-    alert("Selecione um registro na grade.");
-  }}
-}});
-document.getElementById("senha-usuario").addEventListener("click", (event) => {{
-  if (!usuarioSelecionado()) {{
-    event.preventDefault();
-    alert("Selecione um registro na grade.");
-    return;
-  }}
-  if (!confirm("Pedir para o usuário trocar a senha no próximo acesso?")) event.preventDefault();
-}});
-grade.querySelectorAll("tbody tr").forEach((row) => {{
-  row.addEventListener("click", (event) => {{
-    if (event.target.closest("input,a,button")) return;
-    const radio = row.querySelector('input[type="radio"]');
-    if (!radio) return;
-    radio.checked = true;
-    atualizarAcoes();
-  }});
-  row.addEventListener("dblclick", () => {{
-    const radio = row.querySelector('input[type="radio"]');
-    if (!radio) return;
-    radio.checked = true;
-    document.getElementById("editar-usuario").click();
-  }});
-}});
-</script>
-"""
-    return page("Usuários", body, logged=True, current=USUARIOS_PATH, wide=True)
+        delete = row_actions(USUARIOS_PATH, item_id, q, "Excluir este usuário?", extra) if item_id != current_id else (
+            f'<div class="row-actions"><a href="{esc(usuarios_url(acao="editar", id=str(item_id), q=q))}">Editar</a>{extra}</div>'
+        )
+        body_rows.append(
+            f'<tr class="{selected.strip()}">'
+            f"<td><strong>{esc(nome)}</strong><br>{esc(login)}</td>"
+            f"<td>{esc(email or '—')}</td><td>{pill}</td><td>{delete}</td></tr>"
+        )
+    table = (
+        "<table class=\"grid\"><thead><tr><th>Nome</th><th>E-mail</th><th>Status</th><th>Ações</th></tr></thead><tbody>"
+        + ("".join(body_rows) or '<tr><td colspan="4">Nenhum usuário encontrado.</td></tr>')
+        + "</tbody></table>"
+    )
+    body = popup + screen(
+        "CADASTROS", "Usuários", "Pessoas com acesso à área restrita.",
+        flashes_html(shown, erro), form_title, form, "Usuários cadastrados", len(rows), table,
+    )
+    return page(
+        "Usuários", body, logged=True, current=USUARIOS_PATH, wide=True,
+        search={"action": USUARIOS_PATH, "q": q, "placeholder": "Nome, login ou e-mail"},
+        action={"href": usuarios_url(acao="incluir", q=q), "label": "+ Novo usuário"},
+    )
 
 
 def password_form(error: str = "") -> bytes:
     message = f'<p class="error">{esc(error)}</p>' if error else ""
     body = f"""
-<section class="login-card">
+<header class="page-head">
+  <p class="eyebrow">CONTA</p>
   <h1>Trocar senha</h1>
-  <p>Para continuar, informe a senha atual e escolha uma nova senha.</p>
+  <p class="lede">Para continuar, informe a senha atual e escolha uma nova senha.</p>
+</header>
+<section class="panel">
   {message}
-  <form method="post" action="{esc(PASSWORD_PATH)}">
+  <form class="record-form" method="post" action="{esc(PASSWORD_PATH)}">
     <label>Senha atual<input name="atual" type="password" autocomplete="current-password" required autofocus></label>
     <label>Nova senha<input name="nova" type="password" autocomplete="new-password" required></label>
     <label>Confirmar nova senha<input name="confirmar" type="password" autocomplete="new-password" required></label>
@@ -1592,9 +1443,12 @@ def password_form(error: str = "") -> bytes:
 
 def module_page(title: str, text: str, current: str) -> bytes:
     body = f"""
-<h1>{esc(title)}</h1>
-<p>{esc(text)}</p>
-<p>A estrutura de acesso já está pronta. O lançamento dos registros entra na próxima etapa.</p>
+<header class="page-head">
+  <p class="eyebrow">APINIL</p>
+  <h1>{esc(title)}</h1>
+  <p class="lede">{esc(text)}</p>
+</header>
+<section class="panel"><p>A estrutura de acesso já está pronta. O lançamento dos registros entra na próxima etapa.</p></section>
 """
     return page(title, body, logged=True, current=current)
 
@@ -1663,6 +1517,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_html(200, login_form())
             return
         user = current_user(self)
+        VIEWER.set(user)
         if path == PASSWORD_PATH:
             if not user:
                 self.redirect("/restrito/login")
@@ -1761,12 +1616,14 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == PASSWORD_PATH:
             user = current_user(self)
+            VIEWER.set(user)
             if not user:
                 self.redirect("/restrito/login")
                 return
             self.handle_password_post(user, form)
             return
         user = current_user(self)
+        VIEWER.set(user)
         if user and user["must_change_password"]:
             self.redirect(PASSWORD_PATH)
             return
