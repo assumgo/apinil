@@ -23,6 +23,7 @@ SESSION_COOKIE = "apinil_session"
 SESSION_HOURS = 12
 PBKDF2_ROUNDS = 600_000
 MAX_FORM_BYTES = 64 * 1024
+MAX_UPLOAD_BYTES = 4 * 1024 * 1024
 MAX_WORKERS = 8
 REQUEST_TIMEOUT = 20
 THROTTLE_WINDOW = timedelta(minutes=15)
@@ -702,6 +703,22 @@ html[data-theme="dark"] .app-top { background: rgba(18, 24, 21, .92); }
 .panel-head { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
 .panel-head span { color: var(--muted); font-size: 13px; white-space: nowrap; }
 .record-form button[type="submit"] { width: 100%; margin-top: 4px; }
+.record-form .form-actions { display: flex; gap: 8px; }
+.record-form .form-actions button[type="submit"] { width: auto; flex: 1; margin-top: 0; }
+.tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 12px; }
+.tabs button { width: auto; background: transparent; color: var(--ink); border: 1px solid var(--line); }
+.tabs button.is-on { background: var(--green); color: white; border-color: var(--green); }
+.tab-panel { display: none; gap: 12px; }
+.tab-panel.is-on { display: grid; }
+.doc-row, .cep-row { display: flex; gap: 8px; align-items: end; }
+.doc-row input, .cep-row input { flex: 1; }
+.inline-btn { width: auto; white-space: nowrap; }
+.addr { border: 1px solid var(--line); border-radius: 12px; padding: 12px; display: grid; gap: 10px; }
+.addr h3 { margin: 0; font-size: 15px; }
+.hint { margin: 0; color: var(--muted); font-size: 13px; }
+.split.wide-form { grid-template-columns: minmax(440px, 1.2fr) minmax(280px, .8fr); }
+.parcelas { display: grid; gap: 8px; }
+.parcela { display: grid; grid-template-columns: 72px 1fr 1fr; gap: 8px; align-items: end; }
 .text-link { color: var(--muted); font-weight: 600; text-decoration: none; text-align: center; }
 .record-form textarea { min-height: 96px; resize: vertical; }
 .record-form input[readonly] { color: var(--muted); }
@@ -738,7 +755,8 @@ dialog.modal h2 { margin: 0 0 8px; }
   .app-side { transform: translateX(-105%); transition: transform .2s ease; z-index: 20; }
   .app-side.is-open { transform: none; }
   .app-main { margin-left: 0; }
-  .split { grid-template-columns: 1fr; }
+  .split, .split.wide-form { grid-template-columns: 1fr; }
+  .parcela { grid-template-columns: 1fr; }
   .app-top { padding: 12px; }
   .app-content { padding: 8px 12px 36px; }
 }
@@ -1479,6 +1497,17 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
 
+    def send_json(self, status: int, payload: dict) -> None:
+        import json
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.add_security_headers()
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def redirect(self, location: str, *, cookie: str | None = None) -> None:
         self.send_response(303)
         self.send_header("Location", location)
@@ -1575,6 +1604,13 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self.handle_usuarios_get(user)
             return
+        if path in ("/restrito/cadastros/pessoas", "/restrito/cadastros/pessoas/consulta", "/restrito/cep", "/restrito/contas-a-pagar", "/restrito/contas-a-receber", "/restrito/titulos", "/restrito/lancamentos/arquivo"):
+            if not user:
+                self.redirect("/restrito/login")
+                return
+            from financeiro import handle_financeiro_get
+            handle_financeiro_get(self, path)
+            return
         pages = {href.rstrip("/"): (label, text) for href, label, text in CADASTROS + MODULES}
         if path in pages:
             if not user:
@@ -1598,16 +1634,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path.rstrip("/")
-        try:
-            length = int(self.headers.get("Content-Length", "0") or 0)
-        except ValueError:
-            length = -1
-        if length < 0 or length > MAX_FORM_BYTES:
+        from financeiro import read_request_form
+        form, files, rejected = read_request_form(self.headers, self.rfile, MAX_FORM_BYTES, MAX_UPLOAD_BYTES)
+        if rejected:
             self.send_html(413, page("Pedido grande", "<h1>Pedido grande demais</h1>"))
             return
+        self.uploads = files
         ensure_schema()
-        raw = self.rfile.read(length).decode("utf-8", "replace")
-        form = {key: values[0] for key, values in parse_qs(raw).items()}
         if path == "/restrito/login":
             self.handle_login(form.get("username", ""), form.get("password", ""))
             return
@@ -1659,6 +1692,13 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_html(403, page("Usuários", "<h1>Usuários</h1><p>Somente um administrador pode cadastrar usuários.</p>", logged=True, current=USUARIOS_PATH))
                 return
             self.handle_usuarios_post(user, form)
+            return
+        if path in ("/restrito/cadastros/pessoas", "/restrito/contas-a-pagar", "/restrito/contas-a-receber"):
+            if not user:
+                self.redirect("/restrito/login")
+                return
+            from financeiro import handle_financeiro_post
+            handle_financeiro_post(self, path, form)
             return
         self.send_html(404, page("Não encontrado", "<h1>Página não encontrada</h1>"))
 

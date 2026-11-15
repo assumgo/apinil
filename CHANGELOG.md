@@ -2,6 +2,11 @@
 
 O número publicado no site fica em `VERSION` e em `public/version.txt`. Cada versão estável recebe uma tag `vX.Y.Z` e um release no GitHub.
 
+## 0.9.0 — 2026-11-15
+
+- Pessoas física e jurídica usam o mesmo cadastro, com CPF ou CNPJ único e endereços por CEP.
+- Contas a pagar e contas a receber geram os títulos a partir da entrada, por XML, PDF ou manual.
+
 ## 0.8.3 — 2026-11-15
 
 - A área restrita passa a usar o painel com menu lateral, pesquisa no topo e formulário ao lado da lista.
