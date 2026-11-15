@@ -1759,10 +1759,12 @@ def titulos_page(conn, rows, q: str, aviso: str, erro: str, baixa: dict) -> byte
   <form id="baixa" class="baixa-bar" method="post" action="{TITULOS_PATH}" onsubmit="return confirm('Confirmar a baixa?')">
     <input type="hidden" name="acao" value="baixar">
     <input type="hidden" name="q" value="{app.esc(q)}">
-    <label>Data da baixa<input name="data_baixa" placeholder="dd/mm/aaaa" value="{app.esc(data_valor)}">{app.field_error(errors, "data_baixa")}</label>
-    <label>Forma<select name="forma_pagamento_id">{opcoes(formas, baixa.get("forma", ""), "Selecione")}</select>{app.field_error(errors, "forma_pagamento_id")}</label>
-    <label>Conta<input name="conta" maxlength="80" value="{app.esc(baixa.get("conta", ""))}" placeholder="Conta do pagamento ou recebimento">{app.field_error(errors, "conta")}</label>
-    <button type="submit">Baixar selecionados</button>
+    <div class="baixa-fields">
+      <label>Data da baixa<input name="data_baixa" placeholder="dd/mm/aaaa" value="{app.esc(data_valor)}">{app.field_error(errors, "data_baixa")}</label>
+      <label>Forma<select name="forma_pagamento_id">{opcoes(formas, baixa.get("forma", ""), "Selecione")}</select>{app.field_error(errors, "forma_pagamento_id")}</label>
+      <label>Conta<input name="conta" maxlength="80" value="{app.esc(baixa.get("conta", ""))}" placeholder="Conta do pagamento ou recebimento">{app.field_error(errors, "conta")}</label>
+      <div class="baixa-action"><button type="submit">Baixar selecionados</button></div>
+    </div>
     <p class="hint">Marque os títulos em aberto ou use Baixar na linha.</p>
     <div class="grid-wrap">{table}</div>
   </form>

@@ -838,19 +838,26 @@ html[data-theme="dark"] button.link-danger { color: #ffb4b4; }
 .app-body input[type="checkbox"] {
   width: 16px; height: 16px; padding: 0; accent-color: var(--green); vertical-align: middle;
 }
-.baixa-bar {
-  display: grid;
-  grid-template-columns: 160px minmax(140px, 1fr) minmax(180px, 1.4fr) auto;
-  gap: 8px;
-  align-items: end;
-  margin: 0 0 8px;
-}
+.baixa-bar { display: flex; flex-direction: column; gap: 8px; margin: 0; }
 .baixa-bar input[type="hidden"] { display: none; }
-.baixa-bar > button {
+.baixa-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1fr) minmax(0, 1.4fr) auto;
+  gap: 8px 12px;
+  align-items: start;
+}
+.baixa-fields > label { min-width: 0; max-width: 100%; }
+.baixa-fields input,
+.baixa-fields select {
+  width: 100%; min-width: 0; max-width: 100%; box-sizing: border-box; height: 40px; padding: 8px 10px;
+}
+.baixa-fields .error { display: block; margin-top: 4px; }
+.baixa-action { padding-top: 24px; }
+.baixa-action button {
   box-sizing: border-box; height: 40px; margin: 0; padding: 0 16px; white-space: nowrap;
 }
-.baixa-bar .hint, .baixa-bar .grid-wrap { grid-column: 1 / -1; }
 .baixa-bar .hint { margin: 0; }
+.baixa-bar td.row-actions { vertical-align: middle; white-space: nowrap; }
 .pill { display: inline-block; background: #e5f6ea; color: #114d2c; border-radius: 999px; padding: 3px 10px; font-size: 12px; font-weight: 700; white-space: nowrap; }
 .pill.off { background: #fdecec; color: #8d2b2b; }
 html[data-theme="dark"] .pill { background: #1b4a30; color: #d8f5e4; }
@@ -870,7 +877,8 @@ dialog.modal h2 { margin: 0 0 8px; }
   .app-side { transform: translateX(-105%); transition: transform .2s ease; z-index: 20; }
   .app-side.is-open { transform: none; }
   .app-main { margin-left: 0; }
-  .split, .split.wide-form, .baixa-bar { grid-template-columns: 1fr 1fr; }
+  .split, .split.wide-form, .baixa-fields { grid-template-columns: 1fr 1fr; }
+  .baixa-action { padding-top: 24px; }
   .parcela { grid-template-columns: 1fr; }
   .app-top { padding: 12px; }
   .app-content { padding: 8px 12px 36px; }

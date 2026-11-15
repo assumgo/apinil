@@ -2,6 +2,10 @@
 
 O número publicado no site fica em `VERSION` e em `public/version.txt`. Cada versão estável recebe uma tag `vX.Y.Z` e um release no GitHub.
 
+## 0.9.7 — 2026-11-15
+
+- Na tela de títulos, data, forma, conta e o botão de baixar ficam lado a lado, sem se cobrir.
+
 ## 0.9.6 — 2026-11-15
 
 - Em títulos, dá para baixar um título ou vários de uma vez. A baixa pede a data, a forma de pagamento ou recebimento e a conta.
