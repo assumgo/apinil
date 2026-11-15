@@ -2,6 +2,10 @@
 
 O número publicado no site fica em `VERSION` e em `public/version.txt`. Cada versão estável recebe uma tag `vX.Y.Z` e um release no GitHub.
 
+## 0.9.4 — 2026-11-15
+
+- No modo escuro, os campos e a situação da conta ganham contraste. Os botões de contas a pagar e contas a receber ficam com a mesma altura.
+
 ## 0.9.3 — 2026-11-15
 
 - Em contas a pagar e contas a receber, o formulário, a pesquisa e as grades deixam de se sobrepor no monitor menor. A pesquisa fica inteira, acima da lista.

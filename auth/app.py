@@ -604,13 +604,15 @@ LOCK = """<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fil
 
 APP_CSS = """
 html[data-theme="dark"] {
+  color-scheme: dark;
   --green: #3dbe74;
   --green-dark: #d7f5e4;
-  --ink: #e7f0ea;
-  --muted: #a8b7ad;
-  --line: #2c3a32;
+  --ink: #f3faf6;
+  --muted: #c5d4cb;
+  --line: #3d5248;
   --paper: #121815;
   --white: #1c2420;
+  --field: #24302a;
   --shadow: 0 10px 30px rgba(0, 0, 0, .28);
 }
 .app-body {
@@ -634,12 +636,19 @@ html[data-theme="dark"] {
   font: inherit; color: var(--ink); background: #f3f6f4; border: 1px solid transparent;
   border-radius: 10px; padding: 12px 14px;
 }
-html[data-theme="dark"] .app-body input,
+html[data-theme="dark"] .app-body input:not([type="radio"]):not([type="checkbox"]):not([type="file"]),
 html[data-theme="dark"] .app-body textarea,
-html[data-theme="dark"] .app-body select { background: #121815; }
+html[data-theme="dark"] .app-body select {
+  background: var(--field); color: var(--ink); border-color: #5d7a6a;
+}
+html[data-theme="dark"] .app-body input::placeholder,
+html[data-theme="dark"] .app-body textarea::placeholder { color: #b7c9be; }
 .app-body input:focus, .app-body textarea:focus, .app-body select:focus {
   outline: none; border-color: var(--green); background: var(--white);
 }
+html[data-theme="dark"] .app-body input:focus,
+html[data-theme="dark"] .app-body textarea:focus,
+html[data-theme="dark"] .app-body select:focus { background: #2c3b33; }
 .app-body button, .app-body .primary {
   border: 0; background: var(--green); color: white; border-radius: 10px;
   padding: 12px 16px; font: inherit; font-weight: 700; cursor: pointer; text-decoration: none;
@@ -694,9 +703,12 @@ html[data-theme="dark"] .app-top { background: rgba(18, 24, 21, .92); }
 .eyebrow { margin: 0 0 4px; color: var(--green); font-size: 12px; font-weight: 700; letter-spacing: .12em; }
 .page-head h1 { margin: 0; font-size: 32px; }
 .lede { margin: 6px 0 0; color: var(--muted); max-width: 640px; }
-.flash { background: #e7f5ec; color: var(--green-dark); border-radius: 12px; padding: 12px 14px; margin: 0 0 14px; }
+.flash { background: #e7f5ec; color: #114d2c; border-radius: 12px; padding: 12px 14px; margin: 0 0 14px; }
 .flash.error, .error { color: #8d2b2b; }
 .flash.error { background: #fdecec; font-weight: 600; }
+html[data-theme="dark"] .flash { background: #1b3d2b; color: #d8f5e4; }
+html[data-theme="dark"] .flash.error { background: #3d2424; color: #ffd0d0; }
+html[data-theme="dark"] .error { color: #ffb4b4; }
 .split { display: grid; grid-template-columns: minmax(260px, 340px) minmax(0, 1fr); gap: 16px; align-items: start; }
 .panel { background: var(--white); border-radius: 16px; box-shadow: var(--shadow); padding: 18px; }
 .panel h2 { margin: 0 0 14px; font-size: 18px; }
@@ -759,15 +771,22 @@ html[data-theme="dark"] .app-top { background: rgba(18, 24, 21, .92); }
 .finance-origem label { display: flex; flex-direction: row; align-items: center; gap: 4px; color: var(--ink); white-space: nowrap; }
 .finance-origem input { width: auto; accent-color: var(--green); }
 .file-btn {
-  position: relative; overflow: hidden; display: inline-flex; align-items: center;
-  background: var(--white); color: var(--ink); border: 1px solid var(--line);
-  border-radius: 10px; padding: 7px 10px; font-weight: 700; cursor: pointer; white-space: nowrap;
+  position: relative; overflow: hidden; display: inline-flex; align-items: center; justify-content: center;
+  box-sizing: border-box; height: 40px; background: var(--white); color: var(--ink); border: 1px solid var(--line);
+  border-radius: 10px; padding: 0 12px; font-weight: 700; cursor: pointer; white-space: nowrap;
 }
+html[data-theme="dark"] .file-btn { background: var(--field); color: var(--ink); border-color: #5d7a6a; }
 .file-btn input { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; }
 .finance-desk .campo { display: grid; gap: 4px; font-size: 13px; font-weight: 600; color: var(--muted); }
 .finance-desk .campo input[type="file"] { padding: 6px 8px; }
-.finance-desk .form-actions { display: flex; gap: 8px; align-items: end; }
-.finance-desk .form-actions button { width: auto; flex: 1; margin: 0; padding: 8px 10px; }
+.finance-desk .form-actions { display: flex; gap: 8px; align-items: center; flex: 0 0 auto; }
+.finance-desk .form-actions button,
+.finance-desk form.pay-filters button,
+.app-top .primary {
+  box-sizing: border-box; height: 40px; min-width: 132px; margin: 0; padding: 0 16px;
+  white-space: nowrap; line-height: 1; display: inline-flex; align-items: center; justify-content: center;
+}
+.finance-desk .form-actions button { width: auto; flex: 0 0 auto; }
 .finance-desk .num, .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .parcelas-grid { width: min(720px, 100%); }
 .parcelas-grid td:first-child { width: 72px; font-weight: 700; }
@@ -779,13 +798,7 @@ html[data-theme="dark"] .app-top { background: rgba(18, 24, 21, .92); }
   align-items: end;
   margin: 0 0 8px;
 }
-.finance-desk form.pay-filters button {
-  width: auto;
-  justify-self: start;
-  margin: 0;
-  padding: 8px 14px;
-  white-space: nowrap;
-}
+.finance-desk form.pay-filters button { width: auto; justify-self: start; }
 .finance-list tr.is-pick { cursor: pointer; }
 .finance-list tr.is-pick:hover td { background: #f3faf6; }
 html[data-theme="dark"] .finance-list tr.is-pick:hover td { background: #203128; }
@@ -808,8 +821,14 @@ html[data-theme="dark"] table.grid tr.is-selected { background: #203128; }
 .row-actions form { display: inline; }
 .row-actions button { background: transparent; color: var(--ink); padding: 0; font-weight: 700; }
 .row-actions button.link-danger { color: #c43838; }
-.pill { display: inline-block; background: #e5f6ea; color: var(--green-dark); border-radius: 999px; padding: 3px 10px; font-size: 12px; font-weight: 700; }
+html[data-theme="dark"] .row-actions a,
+html[data-theme="dark"] .row-actions button { color: #f3faf6; }
+html[data-theme="dark"] .row-actions button.link-danger,
+html[data-theme="dark"] button.link-danger { color: #ffb4b4; }
+.pill { display: inline-block; background: #e5f6ea; color: #114d2c; border-radius: 999px; padding: 3px 10px; font-size: 12px; font-weight: 700; white-space: nowrap; }
 .pill.off { background: #fdecec; color: #8d2b2b; }
+html[data-theme="dark"] .pill { background: #1b4a30; color: #d8f5e4; }
+html[data-theme="dark"] .pill.off { background: #4a2424; color: #ffd0d0; }
 .module-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
 .module-card {
   background: var(--white); border-radius: 16px; padding: 18px; box-shadow: var(--shadow);
