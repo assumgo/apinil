@@ -2,6 +2,10 @@
 
 O número publicado no site fica em `VERSION` e em `public/version.txt`. Cada versão estável recebe uma tag `vX.Y.Z` e um release no GitHub.
 
+## 0.9.9 — 2026-11-15
+
+- Os submenus Cadastros e Relatórios ficam recolhidos e só abrem quando o menu é escolhido.
+
 ## 0.9.8 — 2026-11-15
 
 - O menu Relatórios lista títulos em aberto e títulos baixados, com filtro por data, natureza e pessoa.

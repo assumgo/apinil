@@ -497,23 +497,33 @@ def nav_link(href: str, label: str, current: str) -> str:
     return f'<a href="{esc(href)}"{selected}>{mark}<span>{esc(label)}</span></a>'
 
 
+def nav_group(title: str, group_id: str, items, current: str, open_group: bool) -> str:
+    state = "true" if open_group else "false"
+    opened = " is-open" if open_group else ""
+    links = "".join(nav_link(href, label, current) for href, label, _text in items)
+    chevron = (
+        '<svg class="chev" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" '
+        'stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'
+        '<path d="m9 6 6 6-6 6"/></svg>'
+    )
+    return (
+        f'<button type="button" class="nav-toggle{opened}" aria-expanded="{state}" aria-controls="{group_id}">'
+        f"<span>{esc(title)}</span>{chevron}</button>"
+        f'<div class="submenu{opened}" id="{group_id}">{links}</div>'
+    )
+
+
 def side_nav(current: str) -> str:
     user = VIEWER.get()
-    cadastro_open = current.startswith("/restrito/cadastros")
-    section = "is-open" if cadastro_open else ""
     links = [
         f'<a href="/restrito/cadastros"{" aria-current=\"page\"" if current == "/restrito/cadastros" else ""}>'
         f'{icon("home")}<span>Início</span></a>',
-        f'<p class="nav-label {section}">Cadastros</p>',
-        '<div class="submenu">',
-        "".join(nav_link(href, label, current) for href, label, _text in CADASTROS),
-        "</div>",
+        nav_group("Cadastros", "menu-cadastros", CADASTROS, current, current.startswith("/restrito/cadastros/")),
     ]
     links.extend(nav_link(href, label, current) for href, label, _text in MODULES)
-    links.append('<p class="nav-label">Relatórios</p>')
-    links.append('<div class="submenu">')
-    links.extend(nav_link(href, label, current) for href, label, _text in RELATORIOS)
-    links.append("</div>")
+    links.append(nav_group(
+        "Relatórios", "menu-relatorios", RELATORIOS, current, current.startswith("/restrito/relatorios"),
+    ))
     account = ""
     if user:
         identity = user.get("email") or user.get("username") or ""
@@ -603,6 +613,15 @@ def page(
     }});
     const side = document.getElementById("app-side");
     document.getElementById("menu-btn").addEventListener("click", () => side.classList.toggle("is-open"));
+    document.querySelectorAll(".nav-toggle").forEach((button) => {{
+      button.addEventListener("click", () => {{
+        const open = button.getAttribute("aria-expanded") !== "true";
+        button.setAttribute("aria-expanded", open ? "true" : "false");
+        button.classList.toggle("is-open", open);
+        const menu = document.getElementById(button.getAttribute("aria-controls"));
+        if (menu) menu.classList.toggle("is-open", open);
+      }});
+    }});
   </script>
 </body>
 </html>"""
@@ -681,7 +700,18 @@ html[data-theme="dark"] .app-side { background: #18211c; }
 html[data-theme="dark"] .side a:hover { background: #24302a; }
 .side a[aria-current="page"] { background: #e5f3ea; color: var(--green-dark); }
 html[data-theme="dark"] .side a[aria-current="page"] { background: #234233; color: var(--green); }
-.submenu { display: flex; flex-direction: column; gap: 2px; margin-left: 8px; }
+.side button.nav-toggle {
+  width: 100%; margin: 14px 0 2px; padding: 9px 12px; background: transparent; color: var(--muted);
+  border-radius: 10px; font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+  display: flex; align-items: center; gap: 8px; text-align: left; cursor: pointer;
+}
+.side button.nav-toggle .chev { margin-left: auto; transition: transform .15s ease; }
+.side button.nav-toggle.is-open { color: var(--green-dark); }
+.side button.nav-toggle.is-open .chev { transform: rotate(90deg); }
+.side button.nav-toggle:hover { background: #e7f3ec; color: var(--ink); }
+html[data-theme="dark"] .side button.nav-toggle:hover { background: #24302a; }
+.submenu { display: none; flex-direction: column; gap: 2px; margin-left: 8px; }
+.submenu.is-open { display: flex; }
 .submenu a { font-weight: 500; }
 .ico { width: 18px; height: 18px; flex: 0 0 auto; }
 .account { margin-top: auto; padding-top: 16px; border-top: 1px solid var(--line); display: grid; gap: 2px; }
