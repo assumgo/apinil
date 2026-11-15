@@ -2,6 +2,11 @@
 
 O número publicado no site fica em `VERSION` e em `public/version.txt`. Cada versão estável recebe uma tag `vX.Y.Z` e um release no GitHub.
 
+## 0.9.1 — 2026-11-15
+
+- Em contas a pagar e contas a receber, as parcelas nascem do valor, da emissão e da condição e ficam numa grade abaixo da lista.
+- A leitura do XML ou do PDF preenche fornecedor ou cliente, número e valor. Valores usam o formato brasileiro e as datas usam dd/mm/aaaa.
+
 ## 0.9.0 — 2026-11-15
 
 - Pessoas física e jurídica usam o mesmo cadastro, com CPF ou CNPJ único e endereços por CEP.
