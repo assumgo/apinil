@@ -2,6 +2,10 @@
 
 O número publicado no site fica em `VERSION` e em `public/version.txt`. Cada versão estável recebe uma tag `vX.Y.Z` e um release no GitHub.
 
+## 0.9.5 — 2026-11-15
+
+- Em contas a pagar e contas a receber, cada campo da entrada fica na própria coluna. O nome longo do fornecedor não cobre número, valor, emissão nem o arquivo.
+
 ## 0.9.4 — 2026-11-15
 
 - No modo escuro, os campos e a situação da conta ganham contraste. Os botões de contas a pagar e contas a receber ficam com a mesma altura.
