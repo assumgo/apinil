@@ -191,4 +191,31 @@ ALTER TABLE titulo ADD COLUMN IF NOT EXISTS data_baixa date;
 ALTER TABLE titulo ADD COLUMN IF NOT EXISTS forma_pagamento_id bigint REFERENCES forma_pagamento (id);
 
 ALTER TABLE titulo ADD COLUMN IF NOT EXISTS conta text NOT NULL DEFAULT '';
+
+CREATE TABLE IF NOT EXISTS conta (
+    id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    codigo_reduzido text NOT NULL,
+    nome text NOT NULL,
+    banco text NOT NULL DEFAULT '',
+    agencia text NOT NULL DEFAULT '',
+    numero text NOT NULL DEFAULT '',
+    tipo text NOT NULL,
+    descricao text NOT NULL DEFAULT '',
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT conta_codigo_uniq UNIQUE (codigo_reduzido),
+    CONSTRAINT conta_nome_uniq UNIQUE (nome),
+    CONSTRAINT conta_tipo_chk CHECK (tipo IN ('Corrente', 'Poupança', 'Caixa'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS conta_codigo_lower_idx
+    ON conta (lower(codigo_reduzido));
+CREATE UNIQUE INDEX IF NOT EXISTS conta_nome_lower_idx
+    ON conta (lower(nome));
+CREATE UNIQUE INDEX IF NOT EXISTS conta_banco_agencia_numero_idx
+    ON conta (lower(banco), lower(agencia), lower(numero))
+    WHERE btrim(banco) <> '' AND btrim(agencia) <> '' AND btrim(numero) <> '';
+
+ALTER TABLE titulo ADD COLUMN IF NOT EXISTS conta_id bigint REFERENCES conta (id) ON DELETE SET NULL;
+
 CREATE INDEX IF NOT EXISTS lancamento_natureza_idx ON lancamento (natureza, id);

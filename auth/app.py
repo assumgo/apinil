@@ -55,6 +55,7 @@ CADASTROS = (
     ("/restrito/cadastros/tipos-de-documentos", "Tipos de Documentos", "Tipos usados em títulos e lançamentos."),
     ("/restrito/cadastros/condicoes-de-pagamentos", "Condições de Pagamentos", "Prazos e parcelas das negociações."),
     ("/restrito/cadastros/formas-de-pagamentos", "Formas de Pagamentos", "Meios usados para pagar e receber."),
+    ("/restrito/cadastros/contas", "Contas", "Contas bancárias e de caixa usadas na baixa dos títulos."),
     ("/restrito/cadastros/centros-de-custo", "Centros de Custo", "Centros usados para classificar gastos e receitas."),
     ("/restrito/cadastros/usuarios", "Usuários", "Pessoas com acesso à área restrita."),
 )
@@ -96,6 +97,8 @@ TIPOS_DOCUMENTO_INICIAIS = (
 )
 
 FORMAS_PATH = "/restrito/cadastros/formas-de-pagamentos"
+CONTAS_PATH = "/restrito/cadastros/contas"
+TIPOS_CONTA = ("Corrente", "Poupança", "Caixa")
 FORMAS_PAGAMENTO_INICIAIS = (
     (1, "DIH", "Dinheiro"),
     (2, "PIX", "Pix"),
@@ -456,6 +459,7 @@ ICONS = {
     "file": '<path d="M7 3.5h7l5 5V20a1.5 1.5 0 0 1-1.5 1.5h-10.5A1.5 1.5 0 0 1 6 20V5A1.5 1.5 0 0 1 7.5 3.5H7z"/><path d="M14 3.5V9h5"/>',
     "calendar": '<rect x="4" y="5" width="16" height="15" rx="2"/><path d="M8 3.5V7M16 3.5V7M4 10h16"/>',
     "card": '<rect x="3" y="6" width="18" height="12" rx="2"/><path d="M3 10h18"/>',
+    "bank": '<path d="M4 10h16"/><path d="m12 3 9 7H3z"/><path d="M6 10v7M10 10v7M14 10v7M18 10v7"/><path d="M4 17h16v3H4z"/>',
     "tag": '<path d="M3 12V5.5A1.5 1.5 0 0 1 4.5 4H11l9 9-7 7z"/><circle cx="8" cy="8" r="1.2"/>',
     "user": '<circle cx="12" cy="8" r="3.2"/><path d="M5 19.5v-1A4.5 4.5 0 0 1 9.5 14h5a4.5 4.5 0 0 1 4.5 4.5v1"/>',
     "down": '<path d="M7 10h10l-5 6z"/>',
@@ -480,6 +484,7 @@ NAV_ICONS = {
     "/restrito/cadastros/tipos-de-documentos": "file",
     "/restrito/cadastros/condicoes-de-pagamentos": "calendar",
     "/restrito/cadastros/formas-de-pagamentos": "card",
+    "/restrito/cadastros/contas": "bank",
     "/restrito/cadastros/centros-de-custo": "tag",
     "/restrito/cadastros/usuarios": "user",
     "/restrito/contas-a-pagar": "down",
@@ -1268,6 +1273,77 @@ def validate_centro(codigo: str, nome: str, descricao: str) -> dict[str, str]:
     return errors
 
 
+def contas_url(**params: str) -> str:
+    clean = {key: value for key, value in params.items() if value}
+    if not clean:
+        return CONTAS_PATH
+    return CONTAS_PATH + "?" + urlencode(clean)
+
+
+def list_contas(conn, q: str):
+    columns = "id, codigo_reduzido, nome, banco, agencia, numero, tipo, descricao"
+    if not q:
+        return conn.execute(f"SELECT {columns} FROM conta ORDER BY nome, id").fetchall()
+    pattern = like_pattern(q)
+    return conn.execute(
+        f"""
+        SELECT {columns}
+        FROM conta
+        WHERE codigo_reduzido ILIKE %s ESCAPE '\\'
+           OR nome ILIKE %s ESCAPE '\\'
+           OR banco ILIKE %s ESCAPE '\\'
+           OR agencia ILIKE %s ESCAPE '\\'
+           OR numero ILIKE %s ESCAPE '\\'
+           OR tipo ILIKE %s ESCAPE '\\'
+           OR descricao ILIKE %s ESCAPE '\\'
+        ORDER BY nome, id
+        """,
+        (pattern, pattern, pattern, pattern, pattern, pattern, pattern),
+    ).fetchall()
+
+
+def get_conta(conn, item_id: int):
+    return conn.execute(
+        """
+        SELECT id, codigo_reduzido, nome, banco, agencia, numero, tipo, descricao
+        FROM conta
+        WHERE id = %s
+        """,
+        (item_id,),
+    ).fetchone()
+
+
+def validate_conta(codigo: str, nome: str, banco: str, agencia: str, numero: str, tipo: str, descricao: str) -> dict[str, str]:
+    errors = {}
+    referencia = re.compile(r"^[A-Za-z0-9][A-Za-z0-9./-]{0,19}$")
+    if not codigo:
+        errors["codigo_reduzido"] = "Informe o código reduzido."
+    elif not CODIGO_REDUZIDO_RE.fullmatch(codigo):
+        errors["codigo_reduzido"] = "Use letras, números e os sinais . - / , com no máximo 20 caracteres."
+    if not nome:
+        errors["nome"] = "Informe o nome."
+    elif len(nome) > 80:
+        errors["nome"] = "O nome pode ter no máximo 80 caracteres."
+    if tipo not in TIPOS_CONTA:
+        errors["tipo"] = "Escolha corrente, poupança ou caixa."
+    if len(banco) > 60:
+        errors["banco"] = "O banco pode ter no máximo 60 caracteres."
+    if agencia and not referencia.fullmatch(agencia):
+        errors["agencia"] = "Use letras, números e os sinais . - / , com no máximo 20 caracteres."
+    if numero and not referencia.fullmatch(numero):
+        errors["numero"] = "Use letras, números e os sinais . - / , com no máximo 20 caracteres."
+    if tipo in ("Corrente", "Poupança"):
+        if not banco:
+            errors["banco"] = "Informe o banco."
+        if not agencia:
+            errors["agencia"] = "Informe a agência."
+        if not numero:
+            errors["numero"] = "Informe o número da conta."
+    if len(descricao) > 200:
+        errors["descricao"] = "A descrição pode ter no máximo 200 caracteres."
+    return errors
+
+
 
 def is_admin(user) -> bool:
     return user.get("role") in ("master", "admin")
@@ -1515,6 +1591,70 @@ def centros_page(*, rows, q: str, aviso: str, erro: str, editor: dict | None) ->
         "Centros de Custo", body, logged=True, current=CENTROS_PATH, wide=True,
         search={"action": CENTROS_PATH, "q": q, "placeholder": "Código, nome ou descrição"},
         action={"href": centros_url(acao="incluir", q=q), "label": "+ Novo centro"},
+    )
+
+
+def contas_page(*, rows, q: str, aviso: str, erro: str, editor: dict | None) -> bytes:
+    if editor is None:
+        editor = {
+            "titulo": "Nova conta",
+            "id": "",
+            "codigo_reduzido": "",
+            "nome": "",
+            "banco": "",
+            "agencia": "",
+            "numero": "",
+            "tipo": "Corrente",
+            "descricao": "",
+            "errors": {},
+        }
+    creating = not editor.get("id")
+    errors = editor.get("errors") or {}
+    cancel = f'<a class="text-link" href="{esc(contas_url(q=q))}">Cancelar</a>' if not creating else ""
+    ident = esc(editor.get("id") or "")
+    options = []
+    for tipo in TIPOS_CONTA:
+        selected = " selected" if editor.get("tipo") == tipo else ""
+        options.append(f'<option value="{esc(tipo)}"{selected}>{esc(tipo)}</option>')
+    form = f"""
+<form class="record-form" method="post" action="{esc(CONTAS_PATH)}">
+  <input type="hidden" name="acao" value="salvar">
+  <input type="hidden" name="id" value="{ident}">
+  <input type="hidden" name="q" value="{esc(q)}">
+  <label>ID<input value="{ident}" readonly tabindex="-1" placeholder="Gerado ao salvar"></label>
+  <label>Código reduzido<input name="codigo_reduzido" maxlength="20" required value="{esc(editor.get("codigo_reduzido", ""))}" autocomplete="off" autofocus>{field_error(errors, "codigo_reduzido")}</label>
+  <label>Nome<input name="nome" maxlength="80" required value="{esc(editor.get("nome", ""))}">{field_error(errors, "nome")}</label>
+  <label>Tipo<select name="tipo" required>{"".join(options)}</select>{field_error(errors, "tipo")}</label>
+  <label>Banco<input name="banco" maxlength="60" value="{esc(editor.get("banco", ""))}">{field_error(errors, "banco")}</label>
+  <label>Agência<input name="agencia" maxlength="20" value="{esc(editor.get("agencia", ""))}">{field_error(errors, "agencia")}</label>
+  <label>Número<input name="numero" maxlength="20" value="{esc(editor.get("numero", ""))}">{field_error(errors, "numero")}</label>
+  <label>Descrição<textarea name="descricao" maxlength="200">{esc(editor.get("descricao", ""))}</textarea>{field_error(errors, "descricao")}</label>
+  <button type="submit">{"Criar conta" if creating else "Salvar alterações"}</button>
+  {cancel}
+</form>
+"""
+    body_rows = []
+    for item_id, codigo, nome, banco, agencia, numero, tipo, descricao in rows:
+        selected = " is-selected" if str(item_id) == str(editor.get("id") or "") else ""
+        referencia = " / ".join(part for part in (banco, agencia, numero) if part) or "—"
+        body_rows.append(
+            f'<tr class="{selected.strip()}">'
+            f"<td><strong>{esc(codigo)}</strong></td><td>{esc(nome)}</td><td>{esc(referencia)}</td><td>{esc(tipo)}</td>"
+            f"<td>{row_actions(CONTAS_PATH, item_id, q, 'Excluir esta conta?')}</td></tr>"
+        )
+    table = (
+        "<table class=\"grid\"><thead><tr><th>Código</th><th>Nome</th><th>Banco / agência / número</th><th>Tipo</th><th>Ações</th></tr></thead><tbody>"
+        + ("".join(body_rows) or '<tr><td colspan="5">Nenhuma conta encontrada.</td></tr>')
+        + "</tbody></table>"
+    )
+    body = screen(
+        "CADASTROS", "Contas", "Contas bancárias e de caixa usadas na baixa dos títulos.",
+        flashes_html(aviso, erro), editor["titulo"], form, "Contas cadastradas", len(rows), table,
+    )
+    return page(
+        "Contas", body, logged=True, current=CONTAS_PATH, wide=True,
+        search={"action": CONTAS_PATH, "q": q, "placeholder": "Código, nome, banco ou número"},
+        action={"href": contas_url(acao="incluir", q=q), "label": "+ Nova conta"},
     )
 
 
@@ -1779,6 +1919,12 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self.handle_centros_get()
             return
+        if path == CONTAS_PATH:
+            if not user:
+                self.redirect("/restrito/login")
+                return
+            self.handle_contas_get()
+            return
         if path == USUARIOS_PATH:
             if not user:
                 self.redirect("/restrito/login")
@@ -1872,6 +2018,12 @@ class Handler(BaseHTTPRequestHandler):
                 self.redirect("/restrito/login")
                 return
             self.handle_centros_post(form)
+            return
+        if path == CONTAS_PATH:
+            if not current_user(self):
+                self.redirect("/restrito/login")
+                return
+            self.handle_contas_post(form)
             return
         if path == USUARIOS_PATH:
             if not user:
@@ -2378,6 +2530,151 @@ class Handler(BaseHTTPRequestHandler):
             self.send_html(400, centros_page(rows=rows, q=q, aviso="", erro="", editor=editor))
             return
         self.redirect(centros_url(q=q, aviso=aviso))
+
+    def handle_contas_get(self) -> None:
+        params = self.query()
+        q = params.get("q", "").strip()[:80]
+        acao = params.get("acao", "")
+        aviso = {
+            "incluido": "Conta inserida.",
+            "alterado": "Conta alterada.",
+            "excluido": "Conta excluída.",
+        }.get(params.get("aviso", ""), "")
+        erro = {
+            "selecione": "Selecione um registro na grade.",
+            "ausente": "Registro não encontrado.",
+        }.get(params.get("erro", ""), "")
+        editor = None
+        with connect() as conn:
+            if acao == "incluir":
+                editor = {
+                    "titulo": "Inserir conta",
+                    "id": "",
+                    "codigo_reduzido": "",
+                    "nome": "",
+                    "banco": "",
+                    "agencia": "",
+                    "numero": "",
+                    "tipo": "Corrente",
+                    "descricao": "",
+                    "errors": {},
+                }
+            elif acao == "editar":
+                item_id = parse_record_id(params.get("id", ""))
+                row = get_conta(conn, item_id) if item_id else None
+                if row is None:
+                    erro = "Selecione um registro na grade."
+                else:
+                    editor = {
+                        "titulo": "Editar conta",
+                        "id": str(row[0]),
+                        "codigo_reduzido": row[1],
+                        "nome": row[2],
+                        "banco": row[3],
+                        "agencia": row[4],
+                        "numero": row[5],
+                        "tipo": row[6],
+                        "descricao": row[7],
+                        "errors": {},
+                    }
+            rows = list_contas(conn, q)
+        self.send_html(200, contas_page(rows=rows, q=q, aviso=aviso, erro=erro, editor=editor))
+
+    def handle_contas_post(self, form: dict[str, str]) -> None:
+        acao = form.get("acao", "")
+        q = form.get("q", "").strip()[:80]
+        if acao == "salvar":
+            self.save_conta(form, q)
+            return
+        if acao == "editar":
+            item_id = parse_record_id(form.get("id", ""))
+            if item_id is None:
+                self.redirect(contas_url(q=q, erro="selecione"))
+                return
+            self.redirect(contas_url(acao="editar", id=str(item_id), q=q))
+            return
+        if acao == "excluir":
+            item_id = parse_record_id(form.get("id", ""))
+            if item_id is None:
+                self.redirect(contas_url(q=q, erro="selecione"))
+                return
+            with connect() as conn:
+                deleted = conn.execute("DELETE FROM conta WHERE id = %s", (item_id,)).rowcount
+                conn.commit()
+            if not deleted:
+                self.redirect(contas_url(q=q, erro="ausente"))
+                return
+            self.redirect(contas_url(q=q, aviso="excluido"))
+            return
+        self.redirect(CONTAS_PATH)
+
+    def save_conta(self, form: dict[str, str], q: str) -> None:
+        item_id = parse_record_id(form.get("id", ""))
+        codigo = form.get("codigo_reduzido", "").strip()
+        nome = " ".join(form.get("nome", "").split())
+        banco = " ".join(form.get("banco", "").split())
+        agencia = "".join(form.get("agencia", "").split())
+        numero = "".join(form.get("numero", "").split())
+        tipo = form.get("tipo", "").strip()
+        descricao = " ".join(form.get("descricao", "").split())
+        errors = validate_conta(codigo, nome, banco, agencia, numero, tipo, descricao)
+        editor = {
+            "titulo": "Editar conta" if item_id else "Inserir conta",
+            "id": str(item_id or ""),
+            "codigo_reduzido": codigo,
+            "nome": nome,
+            "banco": banco,
+            "agencia": agencia,
+            "numero": numero,
+            "tipo": tipo,
+            "descricao": descricao,
+            "errors": errors,
+        }
+        if errors:
+            with connect() as conn:
+                rows = list_contas(conn, q)
+            self.send_html(400, contas_page(rows=rows, q=q, aviso="", erro="", editor=editor))
+            return
+        try:
+            with connect() as conn:
+                if item_id:
+                    found = get_conta(conn, item_id)
+                    if found is None:
+                        self.redirect(contas_url(q=q, erro="ausente"))
+                        return
+                    conn.execute(
+                        """
+                        UPDATE conta
+                        SET codigo_reduzido = %s, nome = %s, banco = %s, agencia = %s,
+                            numero = %s, tipo = %s, descricao = %s, updated_at = now()
+                        WHERE id = %s
+                        """,
+                        (codigo, nome, banco, agencia, numero, tipo, descricao, item_id),
+                    )
+                    aviso = "alterado"
+                else:
+                    conn.execute(
+                        """
+                        INSERT INTO conta (codigo_reduzido, nome, banco, agencia, numero, tipo, descricao)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        """,
+                        (codigo, nome, banco, agencia, numero, tipo, descricao),
+                    )
+                    aviso = "incluido"
+                conn.commit()
+        except psycopg.errors.UniqueViolation as exc:
+            constraint = (exc.diag.constraint_name or "") if exc.diag else ""
+            if "nome" in constraint:
+                editor["errors"] = {"nome": "Já existe uma conta com este nome."}
+            elif "banco" in constraint:
+                editor["errors"] = {"numero": "Já existe uma conta com este banco, agência e número."}
+            else:
+                editor["errors"] = {"codigo_reduzido": "Já existe uma conta com este código reduzido."}
+            with connect() as conn:
+                rows = list_contas(conn, q)
+            self.send_html(400, contas_page(rows=rows, q=q, aviso="", erro="", editor=editor))
+            return
+        self.redirect(contas_url(q=q, aviso=aviso))
 
     def handle_usuarios_get(self, user) -> None:
         params = self.query()

@@ -2,6 +2,11 @@
 
 O número publicado no site fica em `VERSION` e em `public/version.txt`. Cada versão estável recebe uma tag `vX.Y.Z` e um release no GitHub.
 
+## 0.9.10 — 2026-11-15
+
+- O menu Cadastros ganha Contas, para cadastrar contas bancárias e de caixa. O código reduzido e o nome são únicos.
+- Na baixa de títulos, a conta é escolhida entre as contas cadastradas.
+
 ## 0.9.9 — 2026-11-15
 
 - Os submenus Cadastros e Relatórios ficam recolhidos e só abrem quando o menu é escolhido.
