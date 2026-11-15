@@ -2,6 +2,11 @@
 
 O número publicado no site fica em `VERSION` e em `public/version.txt`. Cada versão estável recebe uma tag `vX.Y.Z` e um release no GitHub.
 
+## 0.9.2 — 2026-11-15
+
+- Contas a pagar e contas a receber pesquisam por vencimento, número, valor e pessoa. A linha escolhida mostra as parcelas.
+- A parcela aparece como 1/2, a primeira de duas.
+
 ## 0.9.1 — 2026-11-15
 
 - Em contas a pagar e contas a receber, as parcelas nascem do valor, da emissão e da condição e ficam numa grade abaixo da lista.

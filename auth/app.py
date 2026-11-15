@@ -764,6 +764,17 @@ html[data-theme="dark"] .app-top { background: rgba(18, 24, 21, .92); }
 .parcelas-grid { width: min(720px, 100%); }
 .parcelas-grid td:first-child { width: 72px; font-weight: 700; }
 .finance-parcelas input { width: 100%; }
+.finance-desk form.pay-filters {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr .8fr 1.2fr auto;
+  gap: 8px;
+  align-items: end;
+  margin: 0 0 8px;
+}
+.finance-desk form.pay-filters button { width: auto; margin: 0; padding: 8px 14px; }
+.finance-list tr.is-pick { cursor: pointer; }
+.finance-list tr.is-pick:hover td { background: #f3faf6; }
+html[data-theme="dark"] .finance-list tr.is-pick:hover td { background: #203128; }
 .text-link { color: var(--muted); font-weight: 600; text-decoration: none; text-align: center; }
 .record-form textarea { min-height: 96px; resize: vertical; }
 .record-form input[readonly] { color: var(--muted); }

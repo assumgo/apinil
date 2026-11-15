@@ -10,6 +10,7 @@ from decimal import Decimal, InvalidOperation
 from email import message_from_bytes
 from email.policy import default
 from urllib.error import URLError
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 import psycopg
@@ -1079,29 +1080,114 @@ def aplicar_arquivo(editor: dict, data: bytes, filename: str, conn, natureza: st
     return "Envie um arquivo XML ou PDF."
 
 
-def list_lancamentos(conn, natureza: str, q: str):
-    if not q:
-        return conn.execute(
-            """
-            SELECT l.id, l.numero_documento, l.situacao, l.valor_total, l.qtde_parcelas, p.nome
-            FROM lancamento l
-            LEFT JOIN pessoa p ON p.id = l.pessoa_id
-            WHERE l.natureza = %s
-            ORDER BY l.id DESC
-            """,
-            (natureza,),
-        ).fetchall()
-    like = "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+def like_param(value: str) -> str:
+    return "%" + value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+
+
+def filtros_da_busca(source: dict) -> dict:
+    return {
+        "vencimento_de": (source.get("vencimento_de") or "").strip()[:10],
+        "vencimento_ate": (source.get("vencimento_ate") or "").strip()[:10],
+        "numero": (source.get("numero") or "").strip()[:40],
+        "valor": (source.get("valor") or "").strip()[:20],
+        "pessoa": (source.get("pessoa") or "").strip()[:80],
+        "q": (source.get("q") or "").strip()[:80],
+    }
+
+
+def erros_da_busca(filtros: dict) -> dict[str, str]:
+    erros = {}
+    inicio = parse_data(filtros["vencimento_de"]) if filtros["vencimento_de"] else None
+    fim = parse_data(filtros["vencimento_ate"]) if filtros["vencimento_ate"] else None
+    if filtros["vencimento_de"] and inicio is None:
+        erros["vencimento_de"] = "Use dd/mm/aaaa."
+    if filtros["vencimento_ate"] and fim is None:
+        erros["vencimento_ate"] = "Use dd/mm/aaaa."
+    if inicio and fim and inicio > fim:
+        erros["vencimento_ate"] = "O fim do intervalo é anterior ao início."
+    if filtros["valor"] and parse_valor(filtros["valor"]) is None:
+        erros["valor"] = "Use o valor no formato 1.234,56."
+    return erros
+
+
+def query_filtros(filtros: dict, **extra) -> str:
+    dados = {chave: valor for chave, valor in filtros.items() if valor}
+    dados.update({chave: valor for chave, valor in extra.items() if valor not in ("", None)})
+    return urlencode(dados)
+
+
+def list_lancamentos(conn, natureza: str, filtros: dict):
+    clauses = ["l.natureza = %s"]
+    params: list = [natureza]
+    if filtros.get("numero"):
+        clauses.append("l.numero_documento ILIKE %s ESCAPE '\\'")
+        params.append(like_param(filtros["numero"]))
+    if filtros.get("pessoa"):
+        clauses.append("coalesce(p.nome, '') ILIKE %s ESCAPE '\\'")
+        params.append(like_param(filtros["pessoa"]))
+    if filtros.get("q"):
+        clauses.append(
+            "(l.numero_documento ILIKE %s ESCAPE '\\' OR coalesce(p.nome, '') ILIKE %s ESCAPE '\\')"
+        )
+        like = like_param(filtros["q"])
+        params.extend([like, like])
+    valor = parse_valor(filtros.get("valor") or "")
+    if filtros.get("valor") and valor is not None:
+        clauses.append(
+            """(
+                l.valor_total = %s
+                OR EXISTS (
+                    SELECT 1 FROM lancamento_parcela lp
+                    WHERE lp.lancamento_id = l.id AND lp.valor = %s
+                )
+                OR EXISTS (
+                    SELECT 1 FROM titulo t
+                    WHERE t.lancamento_id = l.id AND t.valor = %s
+                )
+            )"""
+        )
+        params.extend([valor, valor, valor])
+    inicio = parse_data(filtros.get("vencimento_de") or "") if filtros.get("vencimento_de") else None
+    fim = parse_data(filtros.get("vencimento_ate") or "") if filtros.get("vencimento_ate") else None
+    if inicio and fim and inicio > fim:
+        inicio = fim = None
+    if inicio or fim:
+        def faixa(alias: str) -> tuple[str, list]:
+            partes = []
+            valores = []
+            if inicio:
+                partes.append(f"{alias}.vencimento >= %s")
+                valores.append(inicio)
+            if fim:
+                partes.append(f"{alias}.vencimento <= %s")
+                valores.append(fim)
+            return " AND ".join(partes), valores
+
+        parcela_sql, parcela_valores = faixa("lp")
+        titulo_sql, titulo_valores = faixa("t")
+        clauses.append(
+            f"""(
+                EXISTS (
+                    SELECT 1 FROM lancamento_parcela lp
+                    WHERE lp.lancamento_id = l.id AND {parcela_sql}
+                )
+                OR EXISTS (
+                    SELECT 1 FROM titulo t
+                    WHERE t.lancamento_id = l.id AND {titulo_sql}
+                )
+            )"""
+        )
+        params.extend(parcela_valores)
+        params.extend(titulo_valores)
     return conn.execute(
-        """
+        f"""
         SELECT l.id, l.numero_documento, l.situacao, l.valor_total, l.qtde_parcelas, p.nome
         FROM lancamento l
         LEFT JOIN pessoa p ON p.id = l.pessoa_id
-        WHERE l.natureza = %s
-          AND (l.numero_documento ILIKE %s ESCAPE '\\' OR coalesce(p.nome, '') ILIKE %s ESCAPE '\\')
+        WHERE {' AND '.join(clauses)}
         ORDER BY l.id DESC
         """,
-        (natureza, like, like),
+        params,
     ).fetchall()
 
 
@@ -1245,7 +1331,7 @@ def salvar_lancamento(conn, editor: dict, arquivo: dict | None, gerar: bool) -> 
     return item_id
 
 
-def lancamento_page(conn, natureza: str, rows, q: str, aviso: str, erro: str, editor: dict) -> bytes:
+def lancamento_page(conn, natureza: str, rows, filtros: dict, aviso: str, erro: str, editor: dict) -> bytes:
     app = ui()
     path = PAGAR_PATH if natureza == "pagar" else RECEBER_PATH
     title = "Contas a pagar" if natureza == "pagar" else "Contas a receber"
@@ -1264,12 +1350,13 @@ def lancamento_page(conn, natureza: str, rows, q: str, aviso: str, erro: str, ed
     for value, label in (("manual", "Manual"), ("xml", "XML"), ("pdf", "PDF")):
         checked = " checked" if origem == value else ""
         radios.append(f'<label><input type="radio" name="origem" value="{value}"{checked}> {label}</label>')
+    total_parcelas = max(1, len(editor["parcelas"]))
     parcelas_html = []
     for parcela in editor["parcelas"]:
         numero = parcela["numero"]
         parcelas_html.append(
             "<tr>"
-            f"<td>{numero}</td>"
+            f"<td>{numero}/{total_parcelas}</td>"
             f'<td><input form="entrada" name="parcela_valor_{numero}" value="{app.esc(str(parcela["valor"]))}" inputmode="decimal"></td>'
             f'<td><input form="entrada" name="parcela_vencimento_{numero}" value="{app.esc(str(parcela["vencimento"]))}" placeholder="dd/mm/aaaa"></td>'
             "</tr>"
@@ -1286,7 +1373,12 @@ def lancamento_page(conn, natureza: str, rows, q: str, aviso: str, erro: str, ed
     form = f"""
 <form id="entrada" class="record-form finance-form" method="post" action="{path}" enctype="multipart/form-data">
   <input type="hidden" name="id" value="{app.esc(editor.get("id", ""))}">
-  <input type="hidden" name="q" value="{app.esc(q)}">
+  <input type="hidden" name="q" value="{app.esc(filtros.get("q", ""))}">
+  <input type="hidden" name="vencimento_de" value="{app.esc(filtros.get("vencimento_de", ""))}">
+  <input type="hidden" name="vencimento_ate" value="{app.esc(filtros.get("vencimento_ate", ""))}">
+  <input type="hidden" name="numero" value="{app.esc(filtros.get("numero", ""))}">
+  <input type="hidden" name="valor" value="{app.esc(filtros.get("valor", ""))}">
+  <input type="hidden" name="pessoa" value="{app.esc(filtros.get("pessoa", ""))}">
   <input type="hidden" name="arquivo_nome" value="{app.esc(editor.get("arquivo_nome", ""))}">
   <input type="hidden" name="pessoa_documento" value="{app.esc(editor.get("pessoa_documento", ""))}">
   <input type="hidden" name="pessoa_nome" value="{app.esc(editor.get("pessoa_nome", ""))}">
@@ -1309,19 +1401,40 @@ def lancamento_page(conn, natureza: str, rows, q: str, aviso: str, erro: str, ed
   </div>
 </form>
 """
+    busca_erros = erros_da_busca(filtros)
     body_rows = []
     for item_id, numero, situacao, valor, qtde, nome in rows:
         selected = " is-selected" if str(item_id) == str(editor.get("id") or "") else ""
         pill = "Confirmado" if situacao == "confirmado" else "Rascunho"
+        href = path + "?" + query_filtros(filtros, acao="editar", id=str(item_id))
+        ocultos = "".join(
+            f'<input type="hidden" name="{chave}" value="{app.esc(valor_filtro)}">'
+            for chave, valor_filtro in filtros.items() if valor_filtro
+        )
         body_rows.append(
-            f'<tr class="{selected.strip()}">'
+            f'<tr class="is-pick{selected}" data-href="{app.esc(href)}" title="Ver as parcelas">'
             f"<td><strong>{app.esc(numero or '—')}</strong></td>"
             f"<td>{app.esc(nome or 'Sem pessoa')}</td>"
             f"<td class='num'>{app.esc(format_valor(valor))}</td>"
             f"<td class='num'>{qtde}</td>"
             f"<td><span class='pill{' off' if situacao != 'confirmado' else ''}'>{pill}</span></td>"
-            f"<td>{app.row_actions(path, item_id, q, 'Excluir esta entrada e os títulos dela?')}</td></tr>"
+            f"<td><div class='row-actions'>"
+            f'<a href="{app.esc(href)}">Editar</a>'
+            f'<form method="post" action="{app.esc(path)}" onsubmit="return confirm(\'Excluir esta entrada e os títulos dela?\')">'
+            f'<input type="hidden" name="acao" value="excluir">'
+            f'<input type="hidden" name="id" value="{item_id}">{ocultos}'
+            f'<button type="submit" class="link-danger">Excluir</button></form></div></td></tr>'
         )
+    filtro = f"""
+<form class="pay-filters" method="get" action="{path}">
+  <label>Vencimento de<input name="vencimento_de" placeholder="dd/mm/aaaa" value="{app.esc(filtros.get("vencimento_de", ""))}">{app.field_error(busca_erros, "vencimento_de")}</label>
+  <label>Vencimento até<input name="vencimento_ate" placeholder="dd/mm/aaaa" value="{app.esc(filtros.get("vencimento_ate", ""))}">{app.field_error(busca_erros, "vencimento_ate")}</label>
+  <label>Número<input name="numero" value="{app.esc(filtros.get("numero", ""))}"></label>
+  <label>Valor<input name="valor" inputmode="decimal" placeholder="0,00" value="{app.esc(filtros.get("valor", ""))}">{app.field_error(busca_erros, "valor")}</label>
+  <label>Pessoa<input name="pessoa" value="{app.esc(filtros.get("pessoa", ""))}"></label>
+  <button type="submit">Pesquisar</button>
+</form>
+"""
     table = (
         "<table class='grid'><thead><tr><th>Número</th><th>Pessoa</th><th class='num'>Valor</th><th class='num'>Parcelas</th><th>Situação</th><th>Ações</th></tr></thead><tbody>"
         + ("".join(body_rows) or "<tr><td colspan='6'>Nenhuma entrada encontrada.</td></tr>")
@@ -1350,6 +1463,7 @@ def lancamento_page(conn, natureza: str, rows, q: str, aviso: str, erro: str, ed
 </section>
 <section class="panel finance-list">
   <div class="panel-head"><h2>{app.esc(title)}</h2><span>{app.esc(app.count_label(len(rows)))}</span></div>
+  {filtro}
   <div class="grid-wrap">{table}</div>
 </section>
 <section class="panel finance-parcelas">
@@ -1401,7 +1515,7 @@ function gerarParcelas() {{
     const dia = dias[numero - 1] === undefined ? 30 * numero : dias[numero - 1];
     const vencimento = formatData(new Date(inicio.getFullYear(), inicio.getMonth(), inicio.getDate() + dia, 12));
     alvo.insertAdjacentHTML("beforeend",
-      "<tr><td>" + numero + "</td><td><input form=\\"entrada\\" name=\\"parcela_valor_" + numero + "\\" value=\\"" + valor + "\\" inputmode=\\"decimal\\"></td><td><input form=\\"entrada\\" name=\\"parcela_vencimento_" + numero + "\\" value=\\"" + vencimento + "\\" placeholder=\\"dd/mm/aaaa\\"></td></tr>");
+      "<tr><td>" + numero + "/" + qtde + "</td><td><input form=\\"entrada\\" name=\\"parcela_valor_" + numero + "\\" value=\\"" + valor + "\\" inputmode=\\"decimal\\"></td><td><input form=\\"entrada\\" name=\\"parcela_vencimento_" + numero + "\\" value=\\"" + vencimento + "\\" placeholder=\\"dd/mm/aaaa\\"></td></tr>");
   }}
 }}
 document.getElementById("condicao").addEventListener("change", (event) => {{
@@ -1421,19 +1535,24 @@ document.getElementById("arquivo").addEventListener("change", (event) => {{
   const origem = nome.endsWith(".pdf") ? "pdf" : (nome.endsWith(".xml") ? "xml" : "");
   if (origem) document.querySelector('input[name="origem"][value="' + origem + '"]').checked = true;
 }});
+document.querySelectorAll("tr[data-href]").forEach((row) => {{
+  row.addEventListener("click", (event) => {{
+    if (event.target.closest("a, button, form, input")) return;
+    window.location = row.dataset.href;
+  }});
+}});
 </script>
 """
     return app.page(
         title, body, logged=True, current=path,
-        search={"action": path, "q": q, "placeholder": "Número ou pessoa"},
-        action={"href": path + "?acao=incluir" + (f"&q={q}" if q else ""), "label": "+ Nova entrada"},
+        action={"href": path + "?" + query_filtros(filtros, acao="incluir"), "label": "+ Nova entrada"},
     )
 
 
 def handle_lancamento_get(handler, natureza: str) -> None:
     app = ui()
     params = handler.query()
-    q = params.get("q", "").strip()[:80]
+    filtros = filtros_da_busca(params)
     path = PAGAR_PATH if natureza == "pagar" else RECEBER_PATH
     aviso = {
         "incluido": "Títulos gerados.",
@@ -1452,8 +1571,8 @@ def handle_lancamento_get(handler, natureza: str) -> None:
                 erro = "Registro não encontrado."
             else:
                 editor = loaded
-        rows = list_lancamentos(conn, natureza, q)
-        payload = lancamento_page(conn, natureza, rows, q, aviso, erro, editor)
+        rows = list_lancamentos(conn, natureza, filtros)
+        payload = lancamento_page(conn, natureza, rows, filtros, aviso, erro, editor)
     handler.send_html(200, payload)
 
 
@@ -1470,18 +1589,20 @@ def arquivo_do_pedido(handler) -> dict | None:
 def handle_lancamento_post(handler, form: dict, natureza: str) -> None:
     app = ui()
     path = PAGAR_PATH if natureza == "pagar" else RECEBER_PATH
-    q = form.get("q", "").strip()[:80]
+    filtros = filtros_da_busca(form)
     if form.get("acao") == "excluir":
         item_id = app.parse_record_id(form.get("id", ""))
         if item_id is None:
-            handler.redirect(path)
+            handler.redirect(path + "?" + query_filtros(filtros))
             return
         with app.connect() as conn:
             deleted = conn.execute(
                 "DELETE FROM lancamento WHERE id = %s AND natureza = %s", (item_id, natureza)
             ).rowcount
             conn.commit()
-        handler.redirect(f"{path}?aviso=excluido" if deleted else f"{path}?erro=ausente")
+        aviso_excluir = "excluido" if deleted else ""
+        erro_excluir = "" if deleted else "ausente"
+        handler.redirect(path + "?" + query_filtros(filtros, aviso=aviso_excluir, erro=erro_excluir))
         return
     editor = lancamento_from_form(form, natureza)
     arquivo = arquivo_do_pedido(handler)
@@ -1505,8 +1626,8 @@ def handle_lancamento_post(handler, form: dict, natureza: str) -> None:
         if aviso_xml and not editor["pessoa_id"]:
             editor["errors"]["pessoa_id"] = aviso_xml
         with app.connect() as conn:
-            rows = list_lancamentos(conn, natureza, q)
-            payload = lancamento_page(conn, natureza, rows, q, "", aviso_xml, editor)
+            rows = list_lancamentos(conn, natureza, filtros)
+            payload = lancamento_page(conn, natureza, rows, filtros, "", aviso_xml, editor)
         handler.send_html(400, payload)
         return
     if not gerar and not editor["parcelas"]:
@@ -1521,26 +1642,27 @@ def handle_lancamento_post(handler, form: dict, natureza: str) -> None:
     except (psycopg.Error, ValueError):
         editor["errors"] = {"tipo_documento_id": "Não foi possível gravar. Confira tipo, pessoa, forma e condição."}
         with app.connect() as conn:
-            rows = list_lancamentos(conn, natureza, q)
-            payload = lancamento_page(conn, natureza, rows, q, "", "", editor)
+            rows = list_lancamentos(conn, natureza, filtros)
+            payload = lancamento_page(conn, natureza, rows, filtros, "", "", editor)
         handler.send_html(400, payload)
         return
     if gerar:
         aviso = "alterado" if existed else "incluido"
     else:
         aviso = "lido" if arquivo else "rascunho"
-    handler.redirect(f"{path}?acao=editar&id={item_id}&aviso={aviso}" if not gerar else f"{path}?aviso={aviso}")
+    extra = {"acao": "editar", "id": item_id, "aviso": aviso} if not gerar else {"aviso": aviso}
+    handler.redirect(path + "?" + query_filtros(filtros, **extra))
 
 
 def titulos_page(rows, q: str) -> bytes:
     app = ui()
     body_rows = []
-    for natureza, nome, numero, parcela, valor, vencimento, status in rows:
+    for natureza, nome, numero, parcela, total, valor, vencimento, status in rows:
         body_rows.append(
             "<tr>"
             f"<td>{'Pagar' if natureza == 'pagar' else 'Receber'}</td>"
             f"<td><strong>{app.esc(nome or '—')}</strong><br><span class='hint'>{app.esc(numero)}</span></td>"
-            f"<td>{parcela}</td><td class='num'>{app.esc(format_valor(valor))}</td><td>{app.esc(format_data(vencimento))}</td>"
+            f"<td>{parcela}/{total}</td><td class='num'>{app.esc(format_valor(valor))}</td><td>{app.esc(format_data(vencimento))}</td>"
             f"<td><span class='pill'>{app.esc(status.capitalize())}</span></td></tr>"
         )
     table = (
@@ -1572,7 +1694,9 @@ def handle_titulos_get(handler) -> None:
         if not q:
             rows = conn.execute(
                 """
-                SELECT t.natureza, p.nome, t.numero_documento, t.numero_parcela, t.valor, t.vencimento, t.status
+                SELECT t.natureza, p.nome, t.numero_documento, t.numero_parcela,
+                       COUNT(*) OVER (PARTITION BY t.lancamento_id),
+                       t.valor, t.vencimento, t.status
                 FROM titulo t
                 LEFT JOIN pessoa p ON p.id = t.pessoa_id
                 ORDER BY t.vencimento, t.id
@@ -1582,7 +1706,9 @@ def handle_titulos_get(handler) -> None:
             like = "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
             rows = conn.execute(
                 """
-                SELECT t.natureza, p.nome, t.numero_documento, t.numero_parcela, t.valor, t.vencimento, t.status
+                SELECT t.natureza, p.nome, t.numero_documento, t.numero_parcela,
+                       COUNT(*) OVER (PARTITION BY t.lancamento_id),
+                       t.valor, t.vencimento, t.status
                 FROM titulo t
                 LEFT JOIN pessoa p ON p.id = t.pessoa_id
                 WHERE coalesce(p.nome, '') ILIKE %s ESCAPE '\\'
