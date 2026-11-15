@@ -65,6 +65,11 @@ MODULES = (
     ("/restrito/titulos", "Titulos", "Títulos da fábrica, a pagar e a receber."),
 )
 
+RELATORIOS = (
+    ("/restrito/relatorios/titulos-em-aberto", "Títulos em aberto", "O que ainda falta pagar ou receber."),
+    ("/restrito/relatorios/titulos-baixados", "Títulos baixados", "O que já foi pago ou recebido, com data, forma e conta."),
+)
+
 TIPOS_PATH = "/restrito/cadastros/tipos-de-documentos"
 ESFERAS = ("Nacional", "Federal", "Estadual", "Municipal", "Geral")
 TIPOS_DOCUMENTO_INICIAIS = (
@@ -457,6 +462,7 @@ ICONS = {
     "up": '<path d="M7 14h10l-5-6z"/>',
     "moon": '<path d="M16 3.5A8 8 0 1 0 20.5 14 6.2 6.2 0 0 1 16 3.5z"/>',
     "search": '<circle cx="11" cy="11" r="6"/><path d="m16 16 4 4"/>',
+    "chart": '<path d="M4 19h16"/><path d="M7 16V9"/><path d="M12 16V5"/><path d="M17 16v-6"/>',
     "menu": '<path d="M4 7h16M4 12h16M4 17h16"/>',
 }
 
@@ -479,6 +485,8 @@ NAV_ICONS = {
     "/restrito/contas-a-pagar": "down",
     "/restrito/contas-a-receber": "up",
     "/restrito/titulos": "file",
+    "/restrito/relatorios/titulos-em-aberto": "chart",
+    "/restrito/relatorios/titulos-baixados": "chart",
 }
 
 
@@ -502,6 +510,10 @@ def side_nav(current: str) -> str:
         "</div>",
     ]
     links.extend(nav_link(href, label, current) for href, label, _text in MODULES)
+    links.append('<p class="nav-label">Relatórios</p>')
+    links.append('<div class="submenu">')
+    links.extend(nav_link(href, label, current) for href, label, _text in RELATORIOS)
+    links.append("</div>")
     account = ""
     if user:
         identity = user.get("email") or user.get("username") or ""
@@ -858,6 +870,23 @@ html[data-theme="dark"] button.link-danger { color: #ffb4b4; }
 }
 .baixa-bar .hint { margin: 0; }
 .baixa-bar td.row-actions { vertical-align: middle; white-space: nowrap; }
+.report-filters {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, .8fr) minmax(0, 1.2fr) auto;
+  gap: 8px 12px;
+  align-items: start;
+  margin: 0 0 12px;
+}
+.report-filters > label { min-width: 0; max-width: 100%; }
+.report-filters input, .report-filters select {
+  width: 100%; min-width: 0; max-width: 100%; box-sizing: border-box; height: 40px; padding: 8px 10px;
+}
+.report-filters .error { display: block; margin-top: 4px; }
+.report-action { padding-top: 24px; }
+.report-action button {
+  box-sizing: border-box; height: 40px; margin: 0; padding: 0 16px; white-space: nowrap;
+}
+.eyebrow.section-gap { margin-top: 22px; }
 .pill { display: inline-block; background: #e5f6ea; color: #114d2c; border-radius: 999px; padding: 3px 10px; font-size: 12px; font-weight: 700; white-space: nowrap; }
 .pill.off { background: #fdecec; color: #8d2b2b; }
 html[data-theme="dark"] .pill { background: #1b4a30; color: #d8f5e4; }
@@ -877,7 +906,7 @@ dialog.modal h2 { margin: 0 0 8px; }
   .app-side { transform: translateX(-105%); transition: transform .2s ease; z-index: 20; }
   .app-side.is-open { transform: none; }
   .app-main { margin-left: 0; }
-  .split, .split.wide-form, .baixa-fields { grid-template-columns: 1fr 1fr; }
+  .split, .split.wide-form, .baixa-fields, .report-filters { grid-template-columns: 1fr 1fr; }
   .baixa-action { padding-top: 24px; }
   .parcela { grid-template-columns: 1fr; }
   .app-top { padding: 12px; }
@@ -1004,6 +1033,8 @@ def cadastros_page() -> bytes:
   <p class="lede">Escolha o cadastro que deseja consultar. Os registros já gravados continuam disponíveis.</p>
 </header>
 {cards_for(CADASTROS + MODULES)}
+<p class="eyebrow section-gap">RELATÓRIOS</p>
+{cards_for(RELATORIOS)}
 """
     return page("Início", body, logged=True, current="/restrito/cadastros")
 
@@ -1727,7 +1758,12 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self.handle_usuarios_get(user)
             return
-        if path in ("/restrito/cadastros/pessoas", "/restrito/cadastros/pessoas/consulta", "/restrito/cep", "/restrito/contas-a-pagar", "/restrito/contas-a-receber", "/restrito/titulos", "/restrito/lancamentos/arquivo"):
+        if path in (
+            "/restrito/cadastros/pessoas", "/restrito/cadastros/pessoas/consulta", "/restrito/cep",
+            "/restrito/contas-a-pagar", "/restrito/contas-a-receber", "/restrito/titulos",
+            "/restrito/lancamentos/arquivo", "/restrito/relatorios/titulos-em-aberto",
+            "/restrito/relatorios/titulos-baixados",
+        ):
             if not user:
                 self.redirect("/restrito/login")
                 return

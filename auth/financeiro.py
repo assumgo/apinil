@@ -1782,6 +1782,134 @@ if (marcar) marcar.addEventListener("change", () => {{
     )
 
 
+def filtros_do_relatorio(source: dict) -> dict:
+    return {
+        "de": (source.get("de") or "").strip()[:10],
+        "ate": (source.get("ate") or "").strip()[:10],
+        "natureza": (source.get("natureza") or "").strip(),
+        "pessoa": (source.get("pessoa") or "").strip()[:80],
+    }
+
+
+def erros_do_relatorio(filtros: dict) -> dict:
+    erros = {}
+    inicio = parse_data(filtros["de"]) if filtros["de"] else None
+    fim = parse_data(filtros["ate"]) if filtros["ate"] else None
+    if filtros["de"] and inicio is None:
+        erros["de"] = "Use dd/mm/aaaa."
+    if filtros["ate"] and fim is None:
+        erros["ate"] = "Use dd/mm/aaaa."
+    if inicio and fim and inicio > fim:
+        erros["ate"] = "O fim do intervalo é anterior ao início."
+    if filtros["natureza"] not in ("", "pagar", "receber"):
+        erros["natureza"] = "Escolha pagar ou receber."
+    return erros
+
+
+def listar_relatorio(conn, status: str, filtros: dict):
+    coluna = "t.vencimento" if status == "aberto" else "t.data_baixa"
+    clauses = ["t.status = %s"]
+    params: list = [status]
+    erros = erros_do_relatorio(filtros)
+    inicio = parse_data(filtros["de"]) if filtros["de"] and "de" not in erros else None
+    fim = parse_data(filtros["ate"]) if filtros["ate"] and "ate" not in erros else None
+    if inicio:
+        clauses.append(f"{coluna} >= %s")
+        params.append(inicio)
+    if fim:
+        clauses.append(f"{coluna} <= %s")
+        params.append(fim)
+    if filtros["natureza"] in ("pagar", "receber"):
+        clauses.append("t.natureza = %s")
+        params.append(filtros["natureza"])
+    if filtros["pessoa"]:
+        like = "%" + filtros["pessoa"].replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        clauses.append("coalesce(p.nome, '') ILIKE %s ESCAPE '\\'")
+        params.append(like)
+    return conn.execute(
+        f"""
+        SELECT t.natureza, p.nome, t.numero_documento, t.numero_parcela,
+               COUNT(*) OVER (PARTITION BY t.lancamento_id),
+               t.valor, t.vencimento, t.data_baixa, fp.descricao, t.conta
+        FROM titulo t
+        LEFT JOIN pessoa p ON p.id = t.pessoa_id
+        LEFT JOIN forma_pagamento fp ON fp.id = t.forma_pagamento_id
+        WHERE {" AND ".join(clauses)}
+        ORDER BY {coluna}, t.id
+        """,
+        params,
+    ).fetchall()
+
+
+def relatorio_page(status: str, rows, filtros: dict, erros: dict) -> bytes:
+    app = ui()
+    aberto = status == "aberto"
+    path = "/restrito/relatorios/titulos-em-aberto" if aberto else "/restrito/relatorios/titulos-baixados"
+    title = "Títulos em aberto" if aberto else "Títulos baixados"
+    data_label = "Vencimento" if aberto else "Baixa"
+    natureza = filtros.get("natureza", "")
+    opcoes_natureza = (
+        f'<option value=""{"" if natureza else " selected"}>Todos</option>'
+        f'<option value="pagar"{" selected" if natureza == "pagar" else ""}>Pagar</option>'
+        f'<option value="receber"{" selected" if natureza == "receber" else ""}>Receber</option>'
+    )
+    body_rows = []
+    total = Decimal("0.00")
+    for item_natureza, nome, numero, parcela, qtde, valor, vencimento, data_baixa, forma, conta in rows:
+        total += valor or Decimal("0.00")
+        datas = f"<td>{app.esc(format_data(vencimento))}</td>"
+        extra = ""
+        if not aberto:
+            datas += f"<td>{app.esc(format_data(data_baixa))}</td>"
+            extra = f"<td>{app.esc(forma or '—')}</td><td>{app.esc(conta or '—')}</td>"
+        body_rows.append(
+            "<tr>"
+            f"<td>{'Pagar' if item_natureza == 'pagar' else 'Receber'}</td>"
+            f"<td><strong>{app.esc(nome or '—')}</strong><br><span class='hint'>{app.esc(numero)}</span></td>"
+            f"<td>{parcela}/{qtde}</td>"
+            f"<td class='num'>{app.esc(format_valor(valor))}</td>"
+            f"{datas}{extra}</tr>"
+        )
+    cabeca = "<th>Natureza</th><th>Pessoa</th><th>Parcela</th><th class='num'>Valor</th><th>Vencimento</th>"
+    if not aberto:
+        cabeca += "<th>Baixa</th><th>Forma</th><th>Conta</th>"
+    vazio = "Nenhum título em aberto." if aberto else "Nenhum título baixado."
+    colspan = 8 if not aberto else 5
+    table = (
+        f"<table class='grid'><thead><tr>{cabeca}</tr></thead><tbody>"
+        + ("".join(body_rows) or f"<tr><td colspan='{colspan}'>{vazio}</td></tr>")
+        + "</tbody></table>"
+    )
+    body = f"""
+<header class="page-head">
+  <p class="eyebrow">RELATÓRIOS</p>
+  <h1>{app.esc(title)}</h1>
+  <p class="lede">{"Títulos que ainda estão em aberto." if aberto else "Títulos já pagos ou recebidos."}</p>
+</header>
+<section class="panel">
+  <div class="panel-head"><h2>{app.esc(title)}</h2><span>{"1 título" if len(rows) == 1 else f"{len(rows)} títulos"} · {app.esc(format_valor(total))}</span></div>
+  <form class="report-filters" method="get" action="{path}">
+    <label>{data_label} de<input name="de" placeholder="dd/mm/aaaa" value="{app.esc(filtros.get("de", ""))}">{app.field_error(erros, "de")}</label>
+    <label>{data_label} até<input name="ate" placeholder="dd/mm/aaaa" value="{app.esc(filtros.get("ate", ""))}">{app.field_error(erros, "ate")}</label>
+    <label>Natureza<select name="natureza">{opcoes_natureza}</select>{app.field_error(erros, "natureza")}</label>
+    <label>Pessoa<input name="pessoa" value="{app.esc(filtros.get("pessoa", ""))}"></label>
+    <div class="report-action"><button type="submit">Pesquisar</button></div>
+  </form>
+  <div class="grid-wrap">{table}</div>
+</section>
+"""
+    return app.page(title, body, logged=True, current=path)
+
+
+def handle_relatorio_get(handler, status: str) -> None:
+    filtros = filtros_do_relatorio(handler.query())
+    erros = erros_do_relatorio(filtros)
+    with ui().connect() as conn:
+        rows = listar_relatorio(conn, status, filtros)
+        payload = relatorio_page(status, rows, filtros, erros)
+    handler.send_html(200, payload)
+
+
 def handle_titulos_get(handler) -> None:
     app = ui()
     params = handler.query()
@@ -1894,6 +2022,9 @@ def handle_financeiro_get(handler, path: str) -> None:
         return
     if path == TITULOS_PATH:
         handle_titulos_get(handler)
+        return
+    if path in ("/restrito/relatorios/titulos-em-aberto", "/restrito/relatorios/titulos-baixados"):
+        handle_relatorio_get(handler, "aberto" if path.endswith("aberto") else "baixado")
         return
     handler.send_html(404, ui().page("Não encontrado", "<h1>Página não encontrada</h1>", logged=True))
 
