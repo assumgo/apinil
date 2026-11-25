@@ -19,6 +19,8 @@ from urllib.parse import parse_qs, urlencode, urlparse
 
 import psycopg
 
+from bancos import BANCOS, BANCOS_POR_CODIGO
+
 SESSION_COOKIE = "apinil_session"
 SESSION_HOURS = 12
 PBKDF2_ROUNDS = 600_000
@@ -55,7 +57,8 @@ CADASTROS = (
     ("/restrito/cadastros/tipos-de-documentos", "Tipos de Documentos", "Tipos usados em títulos e lançamentos."),
     ("/restrito/cadastros/condicoes-de-pagamentos", "Condições de Pagamentos", "Prazos e parcelas das negociações."),
     ("/restrito/cadastros/formas-de-pagamentos", "Formas de Pagamentos", "Meios usados para pagar e receber."),
-    ("/restrito/cadastros/contas", "Contas", "Contas bancárias e de caixa usadas na baixa dos títulos."),
+    ("/restrito/cadastros/contas", "Contas", "Caixa interno e contas bancárias usadas na baixa dos títulos."),
+    ("/restrito/cadastros/plano-de-contas", "Plano de Contas", "Contas contábeis usadas para classificar lançamentos."),
     ("/restrito/cadastros/centros-de-custo", "Centros de Custo", "Centros usados para classificar gastos e receitas."),
     ("/restrito/cadastros/usuarios", "Usuários", "Pessoas com acesso à área restrita."),
 )
@@ -98,7 +101,11 @@ TIPOS_DOCUMENTO_INICIAIS = (
 
 FORMAS_PATH = "/restrito/cadastros/formas-de-pagamentos"
 CONTAS_PATH = "/restrito/cadastros/contas"
-TIPOS_CONTA = ("Corrente", "Poupança", "Caixa")
+PLANO_PATH = "/restrito/cadastros/plano-de-contas"
+TIPOS_CONTA = ("Interno", "Externo")
+MODALIDADES_CONTA = ("Corrente", "Poupança")
+AGENCIA_RE = re.compile(r"^\d{1,5}-\d$")
+NUMERO_CONTA_RE = re.compile(r"^\d{1,12}-\d$")
 FORMAS_PAGAMENTO_INICIAIS = (
     (1, "DIH", "Dinheiro"),
     (2, "PIX", "Pix"),
@@ -354,6 +361,7 @@ def migrate_and_seed() -> None:
         seed_tipos_documento(conn)
         seed_formas_pagamento(conn)
         seed_condicoes_pagamento(conn)
+        migrate_contas(conn)
         conn.commit()
 
 
@@ -464,6 +472,9 @@ ICONS = {
     "user": '<circle cx="12" cy="8" r="3.2"/><path d="M5 19.5v-1A4.5 4.5 0 0 1 9.5 14h5a4.5 4.5 0 0 1 4.5 4.5v1"/>',
     "down": '<path d="M7 10h10l-5 6z"/>',
     "up": '<path d="M7 14h10l-5-6z"/>',
+    "pay": '<circle cx="12" cy="12" r="8"/><path d="M12 8v8"/><path d="m8.5 13.5 3.5 3.5 3.5-3.5"/>',
+    "receive": '<circle cx="12" cy="12" r="8"/><path d="M12 16V8"/><path d="m8.5 10.5 3.5-3.5 3.5 3.5"/>',
+    "ledger": '<path d="M6 3.5h12v17H6z"/><path d="M6 8h12"/><path d="M9 12h6"/><path d="M9 16h4"/>',
     "moon": '<path d="M16 3.5A8 8 0 1 0 20.5 14 6.2 6.2 0 0 1 16 3.5z"/>',
     "search": '<circle cx="11" cy="11" r="6"/><path d="m16 16 4 4"/>',
     "chart": '<path d="M4 19h16"/><path d="M7 16V9"/><path d="M12 16V5"/><path d="M17 16v-6"/>',
@@ -485,10 +496,11 @@ NAV_ICONS = {
     "/restrito/cadastros/condicoes-de-pagamentos": "calendar",
     "/restrito/cadastros/formas-de-pagamentos": "card",
     "/restrito/cadastros/contas": "bank",
+    "/restrito/cadastros/plano-de-contas": "ledger",
     "/restrito/cadastros/centros-de-custo": "tag",
     "/restrito/cadastros/usuarios": "user",
-    "/restrito/contas-a-pagar": "down",
-    "/restrito/contas-a-receber": "up",
+    "/restrito/contas-a-pagar": "pay",
+    "/restrito/contas-a-receber": "receive",
     "/restrito/titulos": "file",
     "/restrito/relatorios/titulos-em-aberto": "chart",
     "/restrito/relatorios/titulos-baixados": "chart",
@@ -757,6 +769,11 @@ html[data-theme="dark"] .flash { background: #1b3d2b; color: #d8f5e4; }
 html[data-theme="dark"] .flash.error { background: #3d2424; color: #ffd0d0; }
 html[data-theme="dark"] .error { color: #ffb4b4; }
 .split { display: grid; grid-template-columns: minmax(260px, 340px) minmax(0, 1fr); gap: 16px; align-items: start; }
+.split > .panel { min-width: 0; }
+.record-form, .banco-fields { min-width: 0; }
+.record-form input, .record-form select, .record-form textarea {
+  width: 100%; min-width: 0; max-width: 100%; box-sizing: border-box;
+}
 .panel { background: var(--white); border-radius: 16px; box-shadow: var(--shadow); padding: 18px; }
 .panel h2 { margin: 0 0 14px; font-size: 18px; }
 .panel-head { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
@@ -860,6 +877,8 @@ html[data-theme="dark"] .file-btn { background: var(--field); color: var(--ink);
 .finance-list tr.is-pick:hover td { background: #f3faf6; }
 html[data-theme="dark"] .finance-list tr.is-pick:hover td { background: #203128; }
 .text-link { color: var(--muted); font-weight: 600; text-decoration: none; text-align: center; }
+.banco-fields { display: grid; gap: 12px; }
+.banco-fields[hidden] { display: none; }
 .record-form textarea { min-height: 96px; resize: vertical; }
 .record-form input[readonly] { color: var(--muted); }
 .checkline { display: flex; align-items: center; justify-content: space-between; color: var(--ink); }
@@ -1273,6 +1292,40 @@ def validate_centro(codigo: str, nome: str, descricao: str) -> dict[str, str]:
     return errors
 
 
+def migrate_contas(conn) -> None:
+    conn.execute("ALTER TABLE conta ADD COLUMN IF NOT EXISTS agencia_nome text NOT NULL DEFAULT ''")
+    conn.execute("ALTER TABLE conta ADD COLUMN IF NOT EXISTS modalidade text NOT NULL DEFAULT ''")
+    conn.execute("ALTER TABLE conta DROP CONSTRAINT IF EXISTS conta_tipo_chk")
+    conn.execute(
+        """
+        UPDATE conta
+        SET modalidade = CASE
+                WHEN tipo IN ('Corrente', 'Poupança') THEN tipo
+                ELSE modalidade
+            END,
+            tipo = CASE
+                WHEN tipo = 'Caixa' THEN 'Interno'
+                WHEN tipo IN ('Corrente', 'Poupança') THEN 'Externo'
+                ELSE tipo
+            END
+        WHERE tipo IN ('Caixa', 'Corrente', 'Poupança')
+        """
+    )
+    conn.execute(
+        """
+        ALTER TABLE conta
+        ADD CONSTRAINT conta_tipo_chk CHECK (tipo IN ('Interno', 'Externo'))
+        """
+    )
+    conn.execute("ALTER TABLE conta DROP CONSTRAINT IF EXISTS conta_modalidade_chk")
+    conn.execute(
+        """
+        ALTER TABLE conta
+        ADD CONSTRAINT conta_modalidade_chk CHECK (modalidade IN ('', 'Corrente', 'Poupança'))
+        """
+    )
+
+
 def contas_url(**params: str) -> str:
     clean = {key: value for key, value in params.items() if value}
     if not clean:
@@ -1280,32 +1333,60 @@ def contas_url(**params: str) -> str:
     return CONTAS_PATH + "?" + urlencode(clean)
 
 
+def rotulo_conta(tipo: str, banco: str, agencia: str, numero: str, modalidade: str, agencia_nome: str = "") -> str:
+    if tipo == "Interno":
+        return "Caixa"
+    nome = BANCOS_POR_CODIGO.get(banco, banco)
+    partes = [f"{banco} {nome}".strip()]
+    if agencia:
+        agencia_texto = f"Ag {agencia}"
+        if agencia_nome:
+            agencia_texto += f" {agencia_nome}"
+        partes.append(agencia_texto)
+    if numero:
+        partes.append(f"{modalidade} {numero}".strip())
+    return " · ".join(partes)
+
+
+def codigo_da_conta(tipo: str, banco: str, agencia: str, numero: str) -> str:
+    if tipo == "Interno":
+        return "CX"
+    return f"{banco}-{agencia}-{numero}"
+
+
 def list_contas(conn, q: str):
-    columns = "id, codigo_reduzido, nome, banco, agencia, numero, tipo, descricao"
+    columns = "id, tipo, banco, agencia, agencia_nome, numero, modalidade"
+    order = "ORDER BY tipo DESC, banco, agencia, numero, id"
     if not q:
-        return conn.execute(f"SELECT {columns} FROM conta ORDER BY nome, id").fetchall()
+        return conn.execute(f"SELECT {columns} FROM conta {order}").fetchall()
     pattern = like_pattern(q)
+    codigos = [code for code, name in BANCOS if q.casefold() in name.casefold() or q in code]
+    banco_filtro = " OR banco = ANY(%s)" if codigos else ""
+    params = [pattern, pattern, pattern, pattern, pattern, pattern, pattern]
+    if codigos:
+        params.append(codigos)
     return conn.execute(
         f"""
         SELECT {columns}
         FROM conta
-        WHERE codigo_reduzido ILIKE %s ESCAPE '\\'
-           OR nome ILIKE %s ESCAPE '\\'
-           OR banco ILIKE %s ESCAPE '\\'
+        WHERE banco ILIKE %s ESCAPE '\\'
            OR agencia ILIKE %s ESCAPE '\\'
+           OR agencia_nome ILIKE %s ESCAPE '\\'
            OR numero ILIKE %s ESCAPE '\\'
            OR tipo ILIKE %s ESCAPE '\\'
-           OR descricao ILIKE %s ESCAPE '\\'
-        ORDER BY nome, id
+           OR modalidade ILIKE %s ESCAPE '\\'
+           OR nome ILIKE %s ESCAPE '\\'
+           {banco_filtro}
+        {order}
         """,
-        (pattern, pattern, pattern, pattern, pattern, pattern, pattern),
+        params,
     ).fetchall()
 
 
 def get_conta(conn, item_id: int):
     return conn.execute(
         """
-        SELECT id, codigo_reduzido, nome, banco, agencia, numero, tipo, descricao
+        SELECT id, tipo, banco, agencia, agencia_nome, numero, modalidade
         FROM conta
         WHERE id = %s
         """,
@@ -1313,34 +1394,37 @@ def get_conta(conn, item_id: int):
     ).fetchone()
 
 
-def validate_conta(codigo: str, nome: str, banco: str, agencia: str, numero: str, tipo: str, descricao: str) -> dict[str, str]:
+def contas_para_baixa(conn):
+    rows = conn.execute(
+        """
+        SELECT id, tipo, banco, agencia, agencia_nome, numero, modalidade
+        FROM conta
+        ORDER BY tipo DESC, banco, agencia, numero
+        """
+    ).fetchall()
+    return [
+        (item_id, rotulo_conta(tipo, banco, agencia, numero, modalidade, agencia_nome), "")
+        for item_id, tipo, banco, agencia, agencia_nome, numero, modalidade in rows
+    ]
+
+
+def validate_conta(tipo: str, banco: str, agencia: str, agencia_nome: str, numero: str, modalidade: str) -> dict[str, str]:
     errors = {}
-    referencia = re.compile(r"^[A-Za-z0-9][A-Za-z0-9./-]{0,19}$")
-    if not codigo:
-        errors["codigo_reduzido"] = "Informe o código reduzido."
-    elif not CODIGO_REDUZIDO_RE.fullmatch(codigo):
-        errors["codigo_reduzido"] = "Use letras, números e os sinais . - / , com no máximo 20 caracteres."
-    if not nome:
-        errors["nome"] = "Informe o nome."
-    elif len(nome) > 80:
-        errors["nome"] = "O nome pode ter no máximo 80 caracteres."
     if tipo not in TIPOS_CONTA:
-        errors["tipo"] = "Escolha corrente, poupança ou caixa."
-    if len(banco) > 60:
-        errors["banco"] = "O banco pode ter no máximo 60 caracteres."
-    if agencia and not referencia.fullmatch(agencia):
-        errors["agencia"] = "Use letras, números e os sinais . - / , com no máximo 20 caracteres."
-    if numero and not referencia.fullmatch(numero):
-        errors["numero"] = "Use letras, números e os sinais . - / , com no máximo 20 caracteres."
-    if tipo in ("Corrente", "Poupança"):
-        if not banco:
-            errors["banco"] = "Informe o banco."
-        if not agencia:
-            errors["agencia"] = "Informe a agência."
-        if not numero:
-            errors["numero"] = "Informe o número da conta."
-    if len(descricao) > 200:
-        errors["descricao"] = "A descrição pode ter no máximo 200 caracteres."
+        errors["tipo"] = "Escolha interno ou externo."
+        return errors
+    if tipo == "Interno":
+        return errors
+    if banco not in BANCOS_POR_CODIGO:
+        errors["banco"] = "Escolha o banco na relação oficial."
+    if not AGENCIA_RE.fullmatch(agencia):
+        errors["agencia"] = "Informe a agência com o dígito, no formato 0001-0."
+    if len(agencia_nome) > 80:
+        errors["agencia_nome"] = "O nome da agência pode ter no máximo 80 caracteres."
+    if not NUMERO_CONTA_RE.fullmatch(numero):
+        errors["numero"] = "Informe o número da conta com o dígito, no formato 12345-6."
+    if modalidade not in MODALIDADES_CONTA:
+        errors["modalidade"] = "Escolha poupança ou corrente."
     return errors
 
 
@@ -1594,67 +1678,198 @@ def centros_page(*, rows, q: str, aviso: str, erro: str, editor: dict | None) ->
     )
 
 
+def opcoes_banco(selected: str) -> str:
+    parts = ['<option value="">Selecione</option>']
+    known = False
+    for code, name in BANCOS:
+        mark = ""
+        if code == selected:
+            mark = " selected"
+            known = True
+        parts.append(f'<option value="{esc(code)}"{mark}>{esc(code)} — {esc(name)}</option>')
+    if selected and not known:
+        parts.insert(1, f'<option value="{esc(selected)}" selected>{esc(selected)} — cadastro anterior</option>')
+    return "".join(parts)
+
+
 def contas_page(*, rows, q: str, aviso: str, erro: str, editor: dict | None) -> bytes:
     if editor is None:
         editor = {
             "titulo": "Nova conta",
             "id": "",
-            "codigo_reduzido": "",
-            "nome": "",
+            "tipo": "Externo",
             "banco": "",
             "agencia": "",
+            "agencia_nome": "",
             "numero": "",
-            "tipo": "Corrente",
-            "descricao": "",
+            "modalidade": "Corrente",
             "errors": {},
         }
     creating = not editor.get("id")
     errors = editor.get("errors") or {}
     cancel = f'<a class="text-link" href="{esc(contas_url(q=q))}">Cancelar</a>' if not creating else ""
     ident = esc(editor.get("id") or "")
-    options = []
+    tipos = []
     for tipo in TIPOS_CONTA:
         selected = " selected" if editor.get("tipo") == tipo else ""
-        options.append(f'<option value="{esc(tipo)}"{selected}>{esc(tipo)}</option>')
+        legenda = "Interno — caixa" if tipo == "Interno" else "Externo — banco"
+        tipos.append(f'<option value="{esc(tipo)}"{selected}>{esc(legenda)}</option>')
+    modalidades = []
+    for modalidade in MODALIDADES_CONTA:
+        selected = " selected" if editor.get("modalidade") == modalidade else ""
+        modalidades.append(f'<option value="{esc(modalidade)}"{selected}>{esc(modalidade)}</option>')
     form = f"""
-<form class="record-form" method="post" action="{esc(CONTAS_PATH)}">
+<form id="conta-form" class="record-form" method="post" action="{esc(CONTAS_PATH)}">
+  <input type="hidden" name="acao" value="salvar">
+  <input type="hidden" name="id" value="{ident}">
+  <input type="hidden" name="q" value="{esc(q)}">
+  <label>ID<input value="{ident}" readonly tabindex="-1" placeholder="Gerado ao salvar"></label>
+  <label>Tipo<select name="tipo" required>{"".join(tipos)}</select>{field_error(errors, "tipo")}</label>
+  <div class="banco-fields">
+    <label>Banco<select name="banco">{opcoes_banco(editor.get("banco", ""))}</select>{field_error(errors, "banco")}</label>
+    <label>Agência<input name="agencia" maxlength="7" value="{esc(editor.get("agencia", ""))}" placeholder="0001-0" autocomplete="off">{field_error(errors, "agencia")}</label>
+    <label>Nome da agência<input name="agencia_nome" maxlength="80" value="{esc(editor.get("agencia_nome", ""))}">{field_error(errors, "agencia_nome")}</label>
+    <label>Número da conta<input name="numero" maxlength="14" value="{esc(editor.get("numero", ""))}" placeholder="12345-6" autocomplete="off">{field_error(errors, "numero")}</label>
+    <label>Poupança ou corrente<select name="modalidade">{"".join(modalidades)}</select>{field_error(errors, "modalidade")}</label>
+  </div>
+  <button type="submit">{"Criar conta" if creating else "Salvar alterações"}</button>
+  {cancel}
+</form>
+<script>
+const tipoConta = document.querySelector("#conta-form [name=tipo]");
+const camposBanco = document.querySelector("#conta-form .banco-fields");
+function sincronizarConta() {{
+  camposBanco.hidden = tipoConta.value !== "Externo";
+}}
+tipoConta.addEventListener("change", sincronizarConta);
+sincronizarConta();
+</script>
+"""
+    body_rows = []
+    for item_id, tipo, banco, agencia, agencia_nome, numero, modalidade in rows:
+        selected = " is-selected" if str(item_id) == str(editor.get("id") or "") else ""
+        if tipo == "Interno":
+            banco_texto, agencia_texto, nome_agencia, numero_texto, modalidade_texto = "—", "—", "—", "—", "Caixa"
+        else:
+            banco_texto = f"{banco} {BANCOS_POR_CODIGO.get(banco, '')}".strip() or banco or "—"
+            agencia_texto = agencia or "—"
+            nome_agencia = agencia_nome or "—"
+            numero_texto = numero or "—"
+            modalidade_texto = modalidade or "—"
+        body_rows.append(
+            f'<tr class="{selected.strip()}">'
+            f"<td>{esc('Interno' if tipo == 'Interno' else 'Externo')}</td>"
+            f"<td>{esc(banco_texto)}</td><td>{esc(agencia_texto)}</td><td>{esc(nome_agencia)}</td>"
+            f"<td>{esc(numero_texto)}</td><td>{esc(modalidade_texto)}</td>"
+            f"<td>{row_actions(CONTAS_PATH, item_id, q, 'Excluir esta conta?')}</td></tr>"
+        )
+    table = (
+        "<table class=\"grid\"><thead><tr><th>Tipo</th><th>Banco</th><th>Agência</th><th>Nome da agência</th>"
+        "<th>Número</th><th>Modalidade</th><th>Ações</th></tr></thead><tbody>"
+        + ("".join(body_rows) or '<tr><td colspan="7">Nenhuma conta encontrada.</td></tr>')
+        + "</tbody></table>"
+    )
+    body = screen(
+        "CADASTROS", "Contas", "Interno é o caixa. Externo é a conta no banco, com agência e número.",
+        flashes_html(aviso, erro), editor["titulo"], form, "Contas cadastradas", len(rows), table,
+    )
+    return page(
+        "Contas", body, logged=True, current=CONTAS_PATH, wide=True,
+        search={"action": CONTAS_PATH, "q": q, "placeholder": "Banco, agência ou número"},
+        action={"href": contas_url(acao="incluir", q=q), "label": "+ Nova conta"},
+    )
+
+
+def plano_url(**params: str) -> str:
+    clean = {key: value for key, value in params.items() if value}
+    if not clean:
+        return PLANO_PATH
+    return PLANO_PATH + "?" + urlencode(clean)
+
+
+def list_plano(conn, q: str):
+    columns = "id, codigo_reduzido, nome, descricao"
+    if not q:
+        return conn.execute(f"SELECT {columns} FROM plano_conta ORDER BY codigo_reduzido, id").fetchall()
+    pattern = like_pattern(q)
+    return conn.execute(
+        f"""
+        SELECT {columns}
+        FROM plano_conta
+        WHERE codigo_reduzido ILIKE %s ESCAPE '\\'
+           OR nome ILIKE %s ESCAPE '\\'
+           OR descricao ILIKE %s ESCAPE '\\'
+        ORDER BY codigo_reduzido, id
+        """,
+        (pattern, pattern, pattern),
+    ).fetchall()
+
+
+def get_plano(conn, item_id: int):
+    return conn.execute(
+        "SELECT id, codigo_reduzido, nome, descricao FROM plano_conta WHERE id = %s",
+        (item_id,),
+    ).fetchone()
+
+
+def validate_plano(codigo: str, nome: str, descricao: str) -> dict[str, str]:
+    errors = {}
+    if not codigo:
+        errors["codigo_reduzido"] = "Informe o código reduzido."
+    elif not CODIGO_REDUZIDO_RE.fullmatch(codigo):
+        errors["codigo_reduzido"] = "Use letras, números e os sinais . - / , com no máximo 20 caracteres."
+    if not nome:
+        errors["nome"] = "Informe o nome."
+    elif len(nome) > 80:
+        errors["nome"] = "O nome pode ter no máximo 80 caracteres."
+    if not descricao:
+        errors["descricao"] = "Informe a descrição."
+    elif len(descricao) > 200:
+        errors["descricao"] = "A descrição pode ter no máximo 200 caracteres."
+    return errors
+
+
+def plano_page(*, rows, q: str, aviso: str, erro: str, editor: dict | None) -> bytes:
+    if editor is None:
+        editor = {"titulo": "Novo plano de contas", "id": "", "codigo_reduzido": "", "nome": "", "descricao": "", "errors": {}}
+    creating = not editor.get("id")
+    errors = editor.get("errors") or {}
+    cancel = f'<a class="text-link" href="{esc(plano_url(q=q))}">Cancelar</a>' if not creating else ""
+    ident = esc(editor.get("id") or "")
+    form = f"""
+<form class="record-form" method="post" action="{esc(PLANO_PATH)}">
   <input type="hidden" name="acao" value="salvar">
   <input type="hidden" name="id" value="{ident}">
   <input type="hidden" name="q" value="{esc(q)}">
   <label>ID<input value="{ident}" readonly tabindex="-1" placeholder="Gerado ao salvar"></label>
   <label>Código reduzido<input name="codigo_reduzido" maxlength="20" required value="{esc(editor.get("codigo_reduzido", ""))}" autocomplete="off" autofocus>{field_error(errors, "codigo_reduzido")}</label>
   <label>Nome<input name="nome" maxlength="80" required value="{esc(editor.get("nome", ""))}">{field_error(errors, "nome")}</label>
-  <label>Tipo<select name="tipo" required>{"".join(options)}</select>{field_error(errors, "tipo")}</label>
-  <label>Banco<input name="banco" maxlength="60" value="{esc(editor.get("banco", ""))}">{field_error(errors, "banco")}</label>
-  <label>Agência<input name="agencia" maxlength="20" value="{esc(editor.get("agencia", ""))}">{field_error(errors, "agencia")}</label>
-  <label>Número<input name="numero" maxlength="20" value="{esc(editor.get("numero", ""))}">{field_error(errors, "numero")}</label>
-  <label>Descrição<textarea name="descricao" maxlength="200">{esc(editor.get("descricao", ""))}</textarea>{field_error(errors, "descricao")}</label>
-  <button type="submit">{"Criar conta" if creating else "Salvar alterações"}</button>
+  <label>Descrição<textarea name="descricao" maxlength="200" required>{esc(editor.get("descricao", ""))}</textarea>{field_error(errors, "descricao")}</label>
+  <button type="submit">{"Criar conta contábil" if creating else "Salvar alterações"}</button>
   {cancel}
 </form>
 """
     body_rows = []
-    for item_id, codigo, nome, banco, agencia, numero, tipo, descricao in rows:
+    for item_id, codigo, nome, descricao in rows:
         selected = " is-selected" if str(item_id) == str(editor.get("id") or "") else ""
-        referencia = " / ".join(part for part in (banco, agencia, numero) if part) or "—"
         body_rows.append(
             f'<tr class="{selected.strip()}">'
-            f"<td><strong>{esc(codigo)}</strong></td><td>{esc(nome)}</td><td>{esc(referencia)}</td><td>{esc(tipo)}</td>"
-            f"<td>{row_actions(CONTAS_PATH, item_id, q, 'Excluir esta conta?')}</td></tr>"
+            f"<td><strong>{esc(codigo)}</strong></td><td>{esc(nome)}</td><td>{esc(descricao)}</td>"
+            f"<td>{row_actions(PLANO_PATH, item_id, q, 'Excluir esta conta do plano?')}</td></tr>"
         )
     table = (
-        "<table class=\"grid\"><thead><tr><th>Código</th><th>Nome</th><th>Banco / agência / número</th><th>Tipo</th><th>Ações</th></tr></thead><tbody>"
-        + ("".join(body_rows) or '<tr><td colspan="5">Nenhuma conta encontrada.</td></tr>')
+        "<table class=\"grid\"><thead><tr><th>Código</th><th>Nome</th><th>Descrição</th><th>Ações</th></tr></thead><tbody>"
+        + ("".join(body_rows) or '<tr><td colspan="4">Nenhuma conta do plano encontrada.</td></tr>')
         + "</tbody></table>"
     )
     body = screen(
-        "CADASTROS", "Contas", "Contas bancárias e de caixa usadas na baixa dos títulos.",
-        flashes_html(aviso, erro), editor["titulo"], form, "Contas cadastradas", len(rows), table,
+        "CADASTROS", "Plano de Contas", "O identificador é gerado ao salvar. O código reduzido e o nome são únicos.",
+        flashes_html(aviso, erro), editor["titulo"], form, "Contas do plano", len(rows), table,
     )
     return page(
-        "Contas", body, logged=True, current=CONTAS_PATH, wide=True,
-        search={"action": CONTAS_PATH, "q": q, "placeholder": "Código, nome, banco ou número"},
-        action={"href": contas_url(acao="incluir", q=q), "label": "+ Nova conta"},
+        "Plano de Contas", body, logged=True, current=PLANO_PATH, wide=True,
+        search={"action": PLANO_PATH, "q": q, "placeholder": "Código, nome ou descrição"},
+        action={"href": plano_url(acao="incluir", q=q), "label": "+ Nova conta"},
     )
 
 
@@ -1925,6 +2140,12 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self.handle_contas_get()
             return
+        if path == PLANO_PATH:
+            if not user:
+                self.redirect("/restrito/login")
+                return
+            self.handle_plano_get()
+            return
         if path == USUARIOS_PATH:
             if not user:
                 self.redirect("/restrito/login")
@@ -2024,6 +2245,12 @@ class Handler(BaseHTTPRequestHandler):
                 self.redirect("/restrito/login")
                 return
             self.handle_contas_post(form)
+            return
+        if path == PLANO_PATH:
+            if not current_user(self):
+                self.redirect("/restrito/login")
+                return
+            self.handle_plano_post(form)
             return
         if path == USUARIOS_PATH:
             if not user:
@@ -2550,13 +2777,12 @@ class Handler(BaseHTTPRequestHandler):
                 editor = {
                     "titulo": "Inserir conta",
                     "id": "",
-                    "codigo_reduzido": "",
-                    "nome": "",
+                    "tipo": "Externo",
                     "banco": "",
                     "agencia": "",
+                    "agencia_nome": "",
                     "numero": "",
-                    "tipo": "Corrente",
-                    "descricao": "",
+                    "modalidade": "Corrente",
                     "errors": {},
                 }
             elif acao == "editar":
@@ -2568,13 +2794,12 @@ class Handler(BaseHTTPRequestHandler):
                     editor = {
                         "titulo": "Editar conta",
                         "id": str(row[0]),
-                        "codigo_reduzido": row[1],
-                        "nome": row[2],
-                        "banco": row[3],
-                        "agencia": row[4],
+                        "tipo": row[1],
+                        "banco": row[2],
+                        "agencia": row[3],
+                        "agencia_nome": row[4],
                         "numero": row[5],
-                        "tipo": row[6],
-                        "descricao": row[7],
+                        "modalidade": row[6] or "Corrente",
                         "errors": {},
                     }
             rows = list_contas(conn, q)
@@ -2610,24 +2835,24 @@ class Handler(BaseHTTPRequestHandler):
 
     def save_conta(self, form: dict[str, str], q: str) -> None:
         item_id = parse_record_id(form.get("id", ""))
-        codigo = form.get("codigo_reduzido", "").strip()
-        nome = " ".join(form.get("nome", "").split())
-        banco = " ".join(form.get("banco", "").split())
-        agencia = "".join(form.get("agencia", "").split())
-        numero = "".join(form.get("numero", "").split())
         tipo = form.get("tipo", "").strip()
-        descricao = " ".join(form.get("descricao", "").split())
-        errors = validate_conta(codigo, nome, banco, agencia, numero, tipo, descricao)
+        banco = "".join(form.get("banco", "").split())
+        agencia = "".join(form.get("agencia", "").split())
+        agencia_nome = " ".join(form.get("agencia_nome", "").split())
+        numero = "".join(form.get("numero", "").split())
+        modalidade = form.get("modalidade", "").strip()
+        if tipo == "Interno":
+            banco = agencia = agencia_nome = numero = modalidade = ""
+        errors = validate_conta(tipo, banco, agencia, agencia_nome, numero, modalidade)
         editor = {
             "titulo": "Editar conta" if item_id else "Inserir conta",
             "id": str(item_id or ""),
-            "codigo_reduzido": codigo,
-            "nome": nome,
+            "tipo": tipo,
             "banco": banco,
             "agencia": agencia,
+            "agencia_nome": agencia_nome,
             "numero": numero,
-            "tipo": tipo,
-            "descricao": descricao,
+            "modalidade": modalidade or "Corrente",
             "errors": errors,
         }
         if errors:
@@ -2635,6 +2860,8 @@ class Handler(BaseHTTPRequestHandler):
                 rows = list_contas(conn, q)
             self.send_html(400, contas_page(rows=rows, q=q, aviso="", erro="", editor=editor))
             return
+        codigo = codigo_da_conta(tipo, banco, agencia, numero)
+        nome = rotulo_conta(tipo, banco, agencia, numero, modalidade, agencia_nome)
         try:
             with connect() as conn:
                 if item_id:
@@ -2646,35 +2873,164 @@ class Handler(BaseHTTPRequestHandler):
                         """
                         UPDATE conta
                         SET codigo_reduzido = %s, nome = %s, banco = %s, agencia = %s,
-                            numero = %s, tipo = %s, descricao = %s, updated_at = now()
+                            agencia_nome = %s, numero = %s, tipo = %s, modalidade = %s,
+                            updated_at = now()
                         WHERE id = %s
                         """,
-                        (codigo, nome, banco, agencia, numero, tipo, descricao, item_id),
+                        (codigo, nome, banco, agencia, agencia_nome, numero, tipo, modalidade, item_id),
                     )
                     aviso = "alterado"
                 else:
                     conn.execute(
                         """
-                        INSERT INTO conta (codigo_reduzido, nome, banco, agencia, numero, tipo, descricao)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        INSERT INTO conta (
+                            codigo_reduzido, nome, banco, agencia, agencia_nome, numero, tipo, modalidade
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                         """,
-                        (codigo, nome, banco, agencia, numero, tipo, descricao),
+                        (codigo, nome, banco, agencia, agencia_nome, numero, tipo, modalidade),
+                    )
+                    aviso = "incluido"
+                conn.commit()
+        except psycopg.errors.UniqueViolation as exc:
+            constraint = (exc.diag.constraint_name or "") if exc.diag else ""
+            if tipo == "Interno":
+                editor["errors"] = {"tipo": "Já existe a conta de caixa."}
+            elif "banco" in constraint or "nome" in constraint or "codigo" in constraint:
+                editor["errors"] = {"numero": "Já existe uma conta com este banco, agência e número."}
+            else:
+                editor["errors"] = {"numero": "Já existe uma conta com estes dados."}
+            with connect() as conn:
+                rows = list_contas(conn, q)
+            self.send_html(400, contas_page(rows=rows, q=q, aviso="", erro="", editor=editor))
+            return
+        self.redirect(contas_url(q=q, aviso=aviso))
+
+    def handle_plano_get(self) -> None:
+        params = self.query()
+        q = params.get("q", "").strip()[:80]
+        acao = params.get("acao", "")
+        aviso = {
+            "incluido": "Conta do plano inserida.",
+            "alterado": "Conta do plano alterada.",
+            "excluido": "Conta do plano excluída.",
+        }.get(params.get("aviso", ""), "")
+        erro = {
+            "selecione": "Selecione um registro na grade.",
+            "ausente": "Registro não encontrado.",
+        }.get(params.get("erro", ""), "")
+        editor = None
+        with connect() as conn:
+            if acao == "incluir":
+                editor = {
+                    "titulo": "Inserir conta do plano",
+                    "id": "",
+                    "codigo_reduzido": "",
+                    "nome": "",
+                    "descricao": "",
+                    "errors": {},
+                }
+            elif acao == "editar":
+                item_id = parse_record_id(params.get("id", ""))
+                row = get_plano(conn, item_id) if item_id else None
+                if row is None:
+                    erro = "Selecione um registro na grade."
+                else:
+                    editor = {
+                        "titulo": "Editar conta do plano",
+                        "id": str(row[0]),
+                        "codigo_reduzido": row[1],
+                        "nome": row[2],
+                        "descricao": row[3],
+                        "errors": {},
+                    }
+            rows = list_plano(conn, q)
+        self.send_html(200, plano_page(rows=rows, q=q, aviso=aviso, erro=erro, editor=editor))
+
+    def handle_plano_post(self, form: dict[str, str]) -> None:
+        acao = form.get("acao", "")
+        q = form.get("q", "").strip()[:80]
+        if acao == "salvar":
+            self.save_plano(form, q)
+            return
+        if acao == "editar":
+            item_id = parse_record_id(form.get("id", ""))
+            if item_id is None:
+                self.redirect(plano_url(q=q, erro="selecione"))
+                return
+            self.redirect(plano_url(acao="editar", id=str(item_id), q=q))
+            return
+        if acao == "excluir":
+            item_id = parse_record_id(form.get("id", ""))
+            if item_id is None:
+                self.redirect(plano_url(q=q, erro="selecione"))
+                return
+            with connect() as conn:
+                deleted = conn.execute("DELETE FROM plano_conta WHERE id = %s", (item_id,)).rowcount
+                conn.commit()
+            if not deleted:
+                self.redirect(plano_url(q=q, erro="ausente"))
+                return
+            self.redirect(plano_url(q=q, aviso="excluido"))
+            return
+        self.redirect(PLANO_PATH)
+
+    def save_plano(self, form: dict[str, str], q: str) -> None:
+        item_id = parse_record_id(form.get("id", ""))
+        codigo = form.get("codigo_reduzido", "").strip()
+        nome = " ".join(form.get("nome", "").split())
+        descricao = " ".join(form.get("descricao", "").split())
+        errors = validate_plano(codigo, nome, descricao)
+        editor = {
+            "titulo": "Editar conta do plano" if item_id else "Inserir conta do plano",
+            "id": str(item_id or ""),
+            "codigo_reduzido": codigo,
+            "nome": nome,
+            "descricao": descricao,
+            "errors": errors,
+        }
+        if errors:
+            with connect() as conn:
+                rows = list_plano(conn, q)
+            self.send_html(400, plano_page(rows=rows, q=q, aviso="", erro="", editor=editor))
+            return
+        try:
+            with connect() as conn:
+                if item_id:
+                    found = get_plano(conn, item_id)
+                    if found is None:
+                        self.redirect(plano_url(q=q, erro="ausente"))
+                        return
+                    conn.execute(
+                        """
+                        UPDATE plano_conta
+                        SET codigo_reduzido = %s, nome = %s, descricao = %s, updated_at = now()
+                        WHERE id = %s
+                        """,
+                        (codigo, nome, descricao, item_id),
+                    )
+                    aviso = "alterado"
+                else:
+                    conn.execute(
+                        """
+                        INSERT INTO plano_conta (codigo_reduzido, nome, descricao)
+                        VALUES (%s, %s, %s)
+                        """,
+                        (codigo, nome, descricao),
                     )
                     aviso = "incluido"
                 conn.commit()
         except psycopg.errors.UniqueViolation as exc:
             constraint = (exc.diag.constraint_name or "") if exc.diag else ""
             if "nome" in constraint:
-                editor["errors"] = {"nome": "Já existe uma conta com este nome."}
-            elif "banco" in constraint:
-                editor["errors"] = {"numero": "Já existe uma conta com este banco, agência e número."}
+                editor["errors"] = {"nome": "Já existe uma conta do plano com este nome."}
             else:
-                editor["errors"] = {"codigo_reduzido": "Já existe uma conta com este código reduzido."}
+                editor["errors"] = {"codigo_reduzido": "Já existe uma conta do plano com este código reduzido."}
             with connect() as conn:
-                rows = list_contas(conn, q)
-            self.send_html(400, contas_page(rows=rows, q=q, aviso="", erro="", editor=editor))
+                rows = list_plano(conn, q)
+            self.send_html(400, plano_page(rows=rows, q=q, aviso="", erro="", editor=editor))
             return
-        self.redirect(contas_url(q=q, aviso=aviso))
+        self.redirect(plano_url(q=q, aviso=aviso))
 
     def handle_usuarios_get(self, user) -> None:
         params = self.query()

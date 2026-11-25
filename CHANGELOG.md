@@ -2,6 +2,12 @@
 
 O número publicado no site fica em `VERSION` e em `public/version.txt`. Cada versão estável recebe uma tag `vX.Y.Z` e um release no GitHub.
 
+## 0.9.11 — 2026-11-25
+
+- O cadastro de contas distingue caixa interno e conta externa. A conta externa usa a relação oficial de bancos do Banco Central, agência com dígito, nome da agência e número com dígito, e informa se é poupança ou corrente.
+- O menu Cadastros ganha Plano de Contas, com identificador automático, código reduzido único, nome único e descrição.
+- Contas a pagar e contas a receber passam a ter ícones diferentes.
+
 ## 0.9.10 — 2026-11-15
 
 - O menu Cadastros ganha Contas, para cadastrar contas bancárias e de caixa. O código reduzido e o nome são únicos.

@@ -1705,9 +1705,7 @@ def titulos_page(conn, rows, q: str, aviso: str, erro: str, baixa: dict) -> byte
     errors = baixa.get("errors") or {}
     marcados = set(baixa.get("ids") or [])
     formas = conn.execute("SELECT id, descricao, '' FROM forma_pagamento ORDER BY descricao").fetchall()
-    contas = conn.execute(
-        "SELECT id, codigo_reduzido || ' · ' || nome, '' FROM conta ORDER BY nome"
-    ).fetchall()
+    contas = app.contas_para_baixa(conn)
     abertos = 0
     body_rows = []
     for item_id, natureza, nome, numero, parcela, total, valor, vencimento, status, data_baixa, forma, conta in rows:
@@ -1962,7 +1960,11 @@ def handle_titulos_post(handler, form: dict) -> None:
             handler.send_html(400, payload)
             return
         conta = conn.execute(
-            "SELECT id, nome FROM conta WHERE id = %s", (int(baixa["conta_id"]),)
+            """
+            SELECT id, tipo, banco, agencia, agencia_nome, numero, modalidade
+            FROM conta WHERE id = %s
+            """,
+            (int(baixa["conta_id"]),),
         ).fetchone()
         if conta is None:
             baixa["errors"]["conta_id"] = "Escolha uma conta cadastrada."
@@ -1970,13 +1972,14 @@ def handle_titulos_post(handler, form: dict) -> None:
             payload = titulos_page(conn, rows, q, "", "", baixa)
             handler.send_html(400, payload)
             return
+        rotulo = app.rotulo_conta(conta[1], conta[2], conta[3], conta[5], conta[6], conta[4])
         atualizados = conn.execute(
             """
             UPDATE titulo
             SET status = 'baixado', data_baixa = %s, forma_pagamento_id = %s, conta = %s, conta_id = %s
             WHERE id = ANY(%s) AND status = 'aberto'
             """,
-            (parse_data(baixa["data"]), int(baixa["forma"]), conta[1], conta[0], baixa["ids"]),
+            (parse_data(baixa["data"]), int(baixa["forma"]), rotulo, conta[0], baixa["ids"]),
         ).rowcount
         conn.commit()
         if not atualizados:
