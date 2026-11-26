@@ -2,6 +2,11 @@
 
 O número publicado no site fica em `VERSION` e em `public/version.txt`. Cada versão estável recebe uma tag `vX.Y.Z` e um release no GitHub.
 
+## 0.9.13 — 2026-11-26
+
+- Contas a pagar pede plano de contas e centro de custo, e grava os dois no lançamento e no título.
+- Para gerar os títulos, tipo de documento, fornecedor, número, valor, emissão, forma, condição, parcelas, plano de contas e centro de custo são obrigatórios. Recibo e promissória recebem número automático.
+
 ## 0.9.12 — 2026-11-26
 
 - Em Títulos, a pesquisa pede vencimento, natureza, pessoa ou valor, e exige ao menos um desses itens. A grade abre vazia e só mostra títulos depois de Pesquisar.

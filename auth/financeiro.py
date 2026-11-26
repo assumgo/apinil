@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 import xml.etree.ElementTree as ET
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -855,8 +856,59 @@ def opcoes(rows, selected: str, vazio: str) -> str:
     return "".join(html)
 
 
+def sem_acento(texto: str) -> str:
+    normal = unicodedata.normalize("NFD", texto or "")
+    return "".join(ch for ch in normal if unicodedata.category(ch) != "Mn").casefold()
+
+
+def prefixo_numero_automatico(nome: str, descricao: str) -> str:
+    codigo = sem_acento(nome).upper()
+    texto = sem_acento(descricao)
+    if codigo == "REC" or texto == "recibo":
+        return "REC"
+    if codigo == "PRO" or texto == "promissoria":
+        return "PRO"
+    return ""
+
+
+def preparar_numero_automatico(conn, editor: dict) -> None:
+    editor["prefixo_numero"] = ""
+    tipo_id = str(editor.get("tipo_documento_id", ""))
+    if tipo_id.isdigit():
+        row = conn.execute(
+            "SELECT nome, descricao FROM tipo_documento WHERE id = %s",
+            (int(tipo_id),),
+        ).fetchone()
+        if row:
+            editor["prefixo_numero"] = prefixo_numero_automatico(row[0], row[1])
+    editor["numero_automatico"] = bool(editor.get("prefixo_numero"))
+
+
+def proximo_numero_documento(conn, prefixo: str) -> str:
+    while True:
+        ultimo = conn.execute(
+            """
+            INSERT INTO documento_sequencia (prefixo, ultimo)
+            VALUES (%s, 1)
+            ON CONFLICT (prefixo) DO UPDATE
+            SET ultimo = documento_sequencia.ultimo + 1
+            RETURNING ultimo
+            """,
+            (prefixo,),
+        ).fetchone()[0]
+        numero = f"{prefixo}-{ultimo:06d}"
+        existe = conn.execute(
+            "SELECT 1 FROM lancamento WHERE numero_documento = %s",
+            (numero,),
+        ).fetchone()
+        if not existe:
+            return numero
+
+
 def carregar_apoio(conn, natureza: str):
-    tipos = conn.execute("SELECT id, nome FROM tipo_documento ORDER BY nome").fetchall()
+    tipos = conn.execute(
+        "SELECT id, nome, descricao FROM tipo_documento ORDER BY nome"
+    ).fetchall()
     papel = ("fornecedor", "ambos") if natureza == "pagar" else ("cliente", "ambos")
     pessoas = [
         (item_id, f"{nome} · {format_documento(documento)}", "")
@@ -889,6 +941,8 @@ def blank_lancamento(natureza: str) -> dict:
         "tipo_documento_id": "",
         "pessoa_id": "",
         "numero_documento": "",
+        "plano_conta_id": "",
+        "centro_custo_id": "",
         "forma_pagamento_id": "",
         "condicao_pagamento_id": "",
         "qtde_parcelas": "1",
@@ -923,6 +977,8 @@ def lancamento_from_form(form: dict, natureza: str) -> dict:
     editor["tipo_documento_id"] = form.get("tipo_documento_id", "").strip()
     editor["pessoa_id"] = form.get("pessoa_id", "").strip()
     editor["numero_documento"] = form.get("numero_documento", "").strip()
+    editor["plano_conta_id"] = form.get("plano_conta_id", "").strip()
+    editor["centro_custo_id"] = form.get("centro_custo_id", "").strip()
     editor["forma_pagamento_id"] = form.get("forma_pagamento_id", "").strip()
     editor["condicao_pagamento_id"] = form.get("condicao_pagamento_id", "").strip()
     editor["qtde_parcelas"] = form.get("qtde_parcelas", "1").strip()
@@ -959,6 +1015,7 @@ def validate_lancamento(editor: dict) -> dict[str, str]:
     errors = {}
     if not editor["tipo_documento_id"].isdigit():
         errors["tipo_documento_id"] = "Escolha o tipo de documento."
+    pessoa_rotulo = "fornecedor" if editor.get("natureza") == "pagar" else "cliente"
     if editor["pessoa_id"] == "__nova__":
         digits = only_digits(editor.get("pessoa_documento", ""))
         if not (valid_cpf(digits) or valid_cnpj(digits)):
@@ -966,11 +1023,18 @@ def validate_lancamento(editor: dict) -> dict[str, str]:
         elif not editor.get("pessoa_nome"):
             errors["pessoa_id"] = "A nota não trouxe o nome do fornecedor ou do cliente."
     elif not str(editor["pessoa_id"]).isdigit():
-        errors["pessoa_id"] = "Escolha a pessoa."
-    if not editor["numero_documento"]:
+        errors["pessoa_id"] = f"Escolha o {pessoa_rotulo}."
+    if editor.get("numero_automatico") and not editor["numero_documento"]:
+        pass
+    elif not editor["numero_documento"]:
         errors["numero_documento"] = "Informe o número do documento."
     elif len(editor["numero_documento"]) > 40:
         errors["numero_documento"] = "Use no máximo 40 caracteres."
+    if editor.get("natureza") == "pagar":
+        if not str(editor.get("plano_conta_id", "")).isdigit():
+            errors["plano_conta_id"] = "Escolha o plano de contas."
+        if not str(editor.get("centro_custo_id", "")).isdigit():
+            errors["centro_custo_id"] = "Escolha o centro de custo."
     if not editor["forma_pagamento_id"].isdigit():
         errors["forma_pagamento_id"] = "Escolha a forma de pagamento."
     if not editor["condicao_pagamento_id"].isdigit():
@@ -1200,7 +1264,7 @@ def load_lancamento(conn, item_id: int, natureza: str) -> dict | None:
         """
         SELECT id, origem, situacao, tipo_documento_id, pessoa_id, numero_documento,
                forma_pagamento_id, condicao_pagamento_id, qtde_parcelas, valor_total,
-               data_emissao, observacao, arquivo_nome
+               data_emissao, observacao, arquivo_nome, plano_conta_id, centro_custo_id
         FROM lancamento
         WHERE id = %s AND natureza = %s
         """,
@@ -1223,6 +1287,8 @@ def load_lancamento(conn, item_id: int, natureza: str) -> dict | None:
         "data_emissao": format_data(row[10]),
         "observacao": row[11],
         "arquivo_nome": row[12],
+        "plano_conta_id": str(row[13] or ""),
+        "centro_custo_id": str(row[14] or ""),
         "titulo": "Editar entrada",
     })
     parcelas = conn.execute(
@@ -1264,6 +1330,10 @@ def salvar_lancamento(conn, editor: dict, arquivo: dict | None, gerar: bool) -> 
                 "UPDATE pessoa SET papel = 'ambos', updated_at = now() WHERE id = %s",
                 (int(editor["pessoa_id"]),),
             )
+    if editor.get("numero_automatico") and not editor["numero_documento"]:
+        editor["numero_documento"] = proximo_numero_documento(conn, editor["prefixo_numero"])
+    plano_id = ui().parse_record_id(str(editor.get("plano_conta_id") or ""))
+    centro_id = ui().parse_record_id(str(editor.get("centro_custo_id") or ""))
     valores = (
         editor["natureza"], editor["origem"], "confirmado" if gerar else "rascunho",
         int(editor["tipo_documento_id"] or 0) or None,
@@ -1275,6 +1345,8 @@ def salvar_lancamento(conn, editor: dict, arquivo: dict | None, gerar: bool) -> 
         parse_valor(editor["valor_total"]) or Decimal("0.00"),
         parse_data(editor["data_emissao"]),
         editor["observacao"],
+        plano_id,
+        centro_id,
     )
     if item_id:
         conn.execute(
@@ -1283,7 +1355,7 @@ def salvar_lancamento(conn, editor: dict, arquivo: dict | None, gerar: bool) -> 
                 origem = %s, situacao = %s, tipo_documento_id = %s, pessoa_id = %s,
                 numero_documento = %s, forma_pagamento_id = %s, condicao_pagamento_id = %s,
                 qtde_parcelas = %s, valor_total = %s, data_emissao = %s, observacao = %s,
-                updated_at = now()
+                plano_conta_id = %s, centro_custo_id = %s, updated_at = now()
             WHERE id = %s AND natureza = %s
             """,
             (*valores[1:], item_id, editor["natureza"]),
@@ -1294,8 +1366,8 @@ def salvar_lancamento(conn, editor: dict, arquivo: dict | None, gerar: bool) -> 
             INSERT INTO lancamento (
                 natureza, origem, situacao, tipo_documento_id, pessoa_id, numero_documento,
                 forma_pagamento_id, condicao_pagamento_id, qtde_parcelas, valor_total,
-                data_emissao, observacao
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                data_emissao, observacao, plano_conta_id, centro_custo_id
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
             valores,
@@ -1324,12 +1396,14 @@ def salvar_lancamento(conn, editor: dict, arquivo: dict | None, gerar: bool) -> 
             conn.execute(
                 """
                 INSERT INTO titulo (
-                    lancamento_id, natureza, pessoa_id, numero_documento, numero_parcela, valor, vencimento
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    lancamento_id, natureza, pessoa_id, numero_documento, numero_parcela, valor, vencimento,
+                    plano_conta_id, centro_custo_id
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     item_id, editor["natureza"], int(editor["pessoa_id"]), editor["numero_documento"],
                     parcela["numero"], parse_valor(str(parcela["valor"])), parse_data(parcela["vencimento"]),
+                    plano_id, centro_id,
                 ),
             )
     return item_id
@@ -1340,7 +1414,13 @@ def lancamento_page(conn, natureza: str, rows, filtros: dict, aviso: str, erro: 
     path = PAGAR_PATH if natureza == "pagar" else RECEBER_PATH
     title = "Contas a pagar" if natureza == "pagar" else "Contas a receber"
     pessoa_label = "Fornecedor" if natureza == "pagar" else "Cliente"
-    lede = "O XML ou o PDF preenche pessoa, número e valor. As parcelas nascem desses dados e ficam na grade de baixo."
+    if natureza == "pagar":
+        lede = (
+            "O XML ou o PDF preenche fornecedor, número e valor. "
+            "Recibo e promissória ganham número ao gerar os títulos."
+        )
+    else:
+        lede = "O XML ou o PDF preenche pessoa, número e valor. As parcelas nascem desses dados e ficam na grade de baixo."
     tipos, pessoas, formas, condicoes = carregar_apoio(conn, natureza)
     pessoas = list(pessoas)
     if editor.get("pessoa_id") == "__nova__" and editor.get("pessoa_nome"):
@@ -1374,6 +1454,33 @@ def lancamento_page(conn, natureza: str, rows, filtros: dict, aviso: str, erro: 
         arquivo_link = f'<span class="hint">{app.esc(editor["arquivo_nome"])}</span>'
     else:
         arquivo_link = ""
+    opcoes_tipo = []
+    for item_id, nome, descricao in tipos:
+        extra = 'data-auto="1"' if prefixo_numero_automatico(nome, descricao) else ""
+        rotulo = f"{nome} · {descricao}" if descricao else nome
+        opcoes_tipo.append((item_id, rotulo, extra))
+    classificacao = ""
+    if natureza == "pagar":
+        planos = [
+            (item_id, f"{codigo} · {nome}", "")
+            for item_id, codigo, nome in conn.execute(
+                "SELECT id, codigo_reduzido, nome FROM plano_conta ORDER BY codigo_reduzido, id"
+            )
+        ]
+        centros = [
+            (item_id, f"{codigo} · {nome}", "")
+            for item_id, codigo, nome in conn.execute(
+                "SELECT id, codigo_reduzido, nome FROM centro_custo ORDER BY codigo_reduzido, id"
+            )
+        ]
+        classificacao = (
+            f'<label class="plano-campo">Plano de contas<select name="plano_conta_id">'
+            f'{opcoes(planos, editor.get("plano_conta_id", ""), "Selecione")}</select>'
+            f'{app.field_error(errors, "plano_conta_id")}</label>'
+            f'<label class="centro-campo">Centro de custo<select name="centro_custo_id">'
+            f'{opcoes(centros, editor.get("centro_custo_id", ""), "Selecione")}</select>'
+            f'{app.field_error(errors, "centro_custo_id")}</label>'
+        )
     form = f"""
 <form id="entrada" class="record-form finance-form" method="post" action="{path}" enctype="multipart/form-data">
   <input type="hidden" name="id" value="{app.esc(editor.get("id", ""))}">
@@ -1386,14 +1493,15 @@ def lancamento_page(conn, natureza: str, rows, filtros: dict, aviso: str, erro: 
   <input type="hidden" name="arquivo_nome" value="{app.esc(editor.get("arquivo_nome", ""))}">
   <input type="hidden" name="pessoa_documento" value="{app.esc(editor.get("pessoa_documento", ""))}">
   <input type="hidden" name="pessoa_nome" value="{app.esc(editor.get("pessoa_nome", ""))}">
-  <label>Tipo de documento<select name="tipo_documento_id">{opcoes([(item[0], item[1], "") for item in tipos], editor.get("tipo_documento_id", ""), "Selecione")}</select>{app.field_error(errors, "tipo_documento_id")}</label>
+  <label>Tipo de documento<select name="tipo_documento_id" id="tipo-documento">{opcoes(opcoes_tipo, editor.get("tipo_documento_id", ""), "Selecione")}</select>{app.field_error(errors, "tipo_documento_id")}</label>
   <label class="span-2">{pessoa_label}<select name="pessoa_id">{opcoes(pessoas, editor.get("pessoa_id", ""), "Selecione")}</select>{app.field_error(errors, "pessoa_id")}</label>
-  <label>Número<input name="numero_documento" maxlength="40" value="{app.esc(editor.get("numero_documento", ""))}">{app.field_error(errors, "numero_documento")}</label>
+  <label>Número<input name="numero_documento" id="numero-documento" maxlength="40" value="{app.esc(editor.get("numero_documento", ""))}">{app.field_error(errors, "numero_documento")}</label>
   <label>Valor total<input name="valor_total" id="valor-total" inputmode="decimal" placeholder="0,00" value="{app.esc(format_valor(editor.get("valor_total", "")) or editor.get("valor_total", ""))}">{app.field_error(errors, "valor_total")}</label>
   <label>Emissão<input name="data_emissao" id="emissao" placeholder="dd/mm/aaaa" value="{app.esc(editor.get("data_emissao", ""))}">{app.field_error(errors, "data_emissao")}</label>
   <label>Forma<select name="forma_pagamento_id">{opcoes(formas, editor.get("forma_pagamento_id", ""), "Selecione")}</select>{app.field_error(errors, "forma_pagamento_id")}</label>
   <label>Condição<select name="condicao_pagamento_id" id="condicao">{opcoes(condicoes, editor.get("condicao_pagamento_id", ""), "Selecione")}</select>{app.field_error(errors, "condicao_pagamento_id")}</label>
   <label>Parcelas<input name="qtde_parcelas" id="qtde" inputmode="numeric" value="{app.esc(str(editor.get("qtde_parcelas", "1")))}">{app.field_error(errors, "qtde_parcelas")}</label>
+  {classificacao}
   <label>Observação<input name="observacao" maxlength="180" value="{app.esc(editor.get("observacao", ""))}"></label>
   <div class="campo span-2">
     <span>Arquivo {arquivo_link}</span>
@@ -1531,6 +1639,17 @@ document.getElementById("condicao").addEventListener("change", (event) => {{
   document.getElementById(id).addEventListener("change", gerarParcelas);
   document.getElementById(id).addEventListener("input", gerarParcelas);
 }});
+const tipoDoc = document.getElementById("tipo-documento");
+const numeroDoc = document.getElementById("numero-documento");
+function atualizarNumero() {{
+  if (!tipoDoc || !numeroDoc) return;
+  const option = tipoDoc.selectedOptions[0];
+  numeroDoc.placeholder = option && option.dataset.auto === "1" ? "Automático" : "";
+}}
+if (tipoDoc) {{
+  tipoDoc.addEventListener("change", atualizarNumero);
+  atualizarNumero();
+}}
 document.getElementById("arquivo").addEventListener("change", (event) => {{
   const file = event.target.files && event.target.files[0];
   document.getElementById("nome-arquivo").textContent = file ? file.name : "";
@@ -1620,11 +1739,18 @@ def handle_lancamento_post(handler, form: dict, natureza: str) -> None:
             aviso_xml = aplicar_arquivo(editor, arquivo["data"], arquivo["filename"], conn, natureza)
     erros_arquivo = editor["errors"]
     gerar = form.get("acao") == "gerar"
+    with app.connect() as conn:
+        preparar_numero_automatico(conn, editor)
     if gerar:
         editor["errors"] = {**erros_arquivo, **validate_lancamento(editor)}
     else:
         editor["errors"] = dict(erros_arquivo)
-        if not editor["numero_documento"] and not arquivo and not erros_arquivo:
+        if (
+            not editor["numero_documento"]
+            and not editor.get("numero_automatico")
+            and not arquivo
+            and not erros_arquivo
+        ):
             editor["errors"]["numero_documento"] = "Envie um XML ou PDF, ou informe o documento."
     if editor["errors"] or (aviso_xml and gerar and not editor["pessoa_id"]):
         if aviso_xml and not editor["pessoa_id"]:
@@ -1644,7 +1770,13 @@ def handle_lancamento_post(handler, form: dict, natureza: str) -> None:
             item_id = salvar_lancamento(conn, editor, arquivo if isinstance(arquivo, dict) else None, gerar)
             conn.commit()
     except (psycopg.Error, ValueError):
-        editor["errors"] = {"tipo_documento_id": "Não foi possível gravar. Confira tipo, pessoa, forma e condição."}
+        editor["errors"] = {
+            "tipo_documento_id": (
+                "Não foi possível gravar. Confira tipo, fornecedor, forma, condição, plano de contas e centro de custo."
+                if natureza == "pagar"
+                else "Não foi possível gravar. Confira tipo, pessoa, forma e condição."
+            )
+        }
         with app.connect() as conn:
             rows = list_lancamentos(conn, natureza, filtros)
             payload = lancamento_page(conn, natureza, rows, filtros, "", "", editor)
