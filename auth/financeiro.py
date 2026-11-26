@@ -1686,21 +1686,78 @@ def ids_marcados(form: dict) -> list[int]:
     return ids[:200]
 
 
-def listar_titulos(conn, q: str):
-    if not q:
-        return conn.execute(TITULOS_SQL + " ORDER BY t.vencimento, t.id").fetchall()
-    like = "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+def filtros_dos_titulos(source: dict) -> dict:
+    return {
+        "vencimento_de": (source.get("vencimento_de") or "").strip()[:10],
+        "vencimento_ate": (source.get("vencimento_ate") or "").strip()[:10],
+        "natureza": (source.get("natureza") or "").strip(),
+        "pessoa": (source.get("pessoa") or "").strip()[:80],
+        "valor": (source.get("valor") or "").strip()[:20],
+    }
+
+
+def criterios_dos_titulos(filtros: dict) -> bool:
+    return any(
+        filtros.get(chave)
+        for chave in ("vencimento_de", "vencimento_ate", "natureza", "pessoa", "valor")
+    )
+
+
+def erros_dos_titulos(filtros: dict, *, exigido: bool = False) -> dict[str, str]:
+    erros: dict[str, str] = {}
+    inicio = parse_data(filtros["vencimento_de"]) if filtros["vencimento_de"] else None
+    fim = parse_data(filtros["vencimento_ate"]) if filtros["vencimento_ate"] else None
+    if filtros["vencimento_de"] and inicio is None:
+        erros["vencimento_de"] = "Use dd/mm/aaaa."
+    if filtros["vencimento_ate"] and fim is None:
+        erros["vencimento_ate"] = "Use dd/mm/aaaa."
+    if inicio and fim and inicio > fim:
+        erros["vencimento_ate"] = "O fim do intervalo é anterior ao início."
+    if filtros["natureza"] not in ("", "pagar", "receber"):
+        erros["natureza"] = "Escolha pagar ou receber."
+    if filtros["valor"] and parse_valor(filtros["valor"]) is None:
+        erros["valor"] = "Use o valor no formato 1.234,56."
+    if exigido and not criterios_dos_titulos(filtros):
+        erros["busca"] = "Informe ao menos um item para pesquisar."
+    return erros
+
+
+def pesquisa_de_titulos(source: dict) -> tuple[dict, dict[str, str], bool]:
+    filtros = filtros_dos_titulos(source)
+    pesquisou = str(source.get("pesquisar") or "") == "1" or criterios_dos_titulos(filtros)
+    return filtros, erros_dos_titulos(filtros, exigido=pesquisou), pesquisou
+
+
+def listar_titulos(conn, filtros: dict):
+    if erros_dos_titulos(filtros, exigido=True):
+        return []
+    clauses = []
+    params: list = []
+    inicio = parse_data(filtros["vencimento_de"]) if filtros["vencimento_de"] else None
+    fim = parse_data(filtros["vencimento_ate"]) if filtros["vencimento_ate"] else None
+    if inicio:
+        clauses.append("t.vencimento >= %s")
+        params.append(inicio)
+    if fim:
+        clauses.append("t.vencimento <= %s")
+        params.append(fim)
+    if filtros["natureza"] in ("pagar", "receber"):
+        clauses.append("t.natureza = %s")
+        params.append(filtros["natureza"])
+    if filtros["pessoa"]:
+        clauses.append("coalesce(p.nome, '') ILIKE %s ESCAPE '\\'")
+        params.append(like_param(filtros["pessoa"]))
+    valor = parse_valor(filtros["valor"])
+    if valor is not None:
+        clauses.append("t.valor = %s")
+        params.append(valor)
     return conn.execute(
-        TITULOS_SQL + """
-        WHERE coalesce(p.nome, '') ILIKE %s ESCAPE '\\'
-           OR t.numero_documento ILIKE %s ESCAPE '\\'
-        ORDER BY t.vencimento, t.id
-        """,
-        (like, like),
+        TITULOS_SQL + " WHERE " + " AND ".join(clauses) + " ORDER BY t.vencimento, t.id",
+        params,
     ).fetchall()
 
 
-def titulos_page(conn, rows, q: str, aviso: str, erro: str, baixa: dict) -> bytes:
+def titulos_page(conn, rows, filtros: dict, erros: dict, aviso: str, erro: str, baixa: dict, pesquisou: bool) -> bytes:
     app = ui()
     errors = baixa.get("errors") or {}
     marcados = set(baixa.get("ids") or [])
@@ -1740,26 +1797,56 @@ def titulos_page(conn, rows, q: str, aviso: str, erro: str, baixa: dict) -> byte
             f"<td class='row-actions'>{acao}</td></tr>"
         )
     marcar = '<input type="checkbox" id="marcar-titulos" aria-label="Selecionar títulos em aberto">' if abertos else ""
+    if not pesquisou:
+        vazio = "Informe um filtro e pesquise."
+    elif erros:
+        vazio = "Ajuste a pesquisa para ver os títulos."
+    else:
+        vazio = "Nenhum título encontrado."
     table = (
         "<table class='grid'><thead><tr>"
         f"<th>{marcar}</th><th>Natureza</th><th>Pessoa</th><th>Parcela</th><th class='num'>Valor</th>"
         "<th>Vencimento</th><th>Status</th><th></th></tr></thead><tbody>"
-        + ("".join(body_rows) or "<tr><td colspan='8'>Nenhum título gerado.</td></tr>")
+        + ("".join(body_rows) or f"<tr><td colspan='8'>{vazio}</td></tr>")
         + "</tbody></table>"
     )
     data_valor = baixa.get("data") or hoje_br()
+    natureza = filtros.get("natureza", "")
+    opcoes_natureza = (
+        f'<option value=""{"" if natureza else " selected"}>Selecione</option>'
+        f'<option value="pagar"{" selected" if natureza == "pagar" else ""}>Pagar</option>'
+        f'<option value="receber"{" selected" if natureza == "receber" else ""}>Receber</option>'
+    )
+    ocultos = "".join(
+        f'<input type="hidden" name="{chave}" value="{app.esc(filtros.get(chave, ""))}">'
+        for chave in ("vencimento_de", "vencimento_ate", "natureza", "pessoa", "valor")
+    )
+    if pesquisou:
+        ocultos += '<input type="hidden" name="pesquisar" value="1">'
+    aviso_busca = (
+        f'<p class="error busca-erro">{app.esc(erros["busca"])}</p>' if erros.get("busca") else ""
+    )
     body = f"""
 <header class="page-head">
   <p class="eyebrow">FINANCEIRO</p>
   <h1>Títulos</h1>
-  <p class="lede">Baixe um título ou vários de uma vez. A data, a forma e a conta valem para todos os marcados.</p>
+  <p class="lede">Pesquise por vencimento, natureza, pessoa ou valor. A lista começa vazia. Depois, baixe um título ou vários de uma vez.</p>
 </header>
 {app.flashes_html(aviso, erro)}
 <section class="panel">
+  <form class="title-filters" method="get" action="{TITULOS_PATH}">
+    <label>Vencimento de<input name="vencimento_de" placeholder="dd/mm/aaaa" value="{app.esc(filtros.get("vencimento_de", ""))}">{app.field_error(erros, "vencimento_de")}</label>
+    <label>Vencimento até<input name="vencimento_ate" placeholder="dd/mm/aaaa" value="{app.esc(filtros.get("vencimento_ate", ""))}">{app.field_error(erros, "vencimento_ate")}</label>
+    <label>Natureza<select name="natureza">{opcoes_natureza}</select>{app.field_error(erros, "natureza")}</label>
+    <label>Pessoa<input name="pessoa" value="{app.esc(filtros.get("pessoa", ""))}"></label>
+    <label>Valor<input name="valor" inputmode="decimal" placeholder="0,00" value="{app.esc(filtros.get("valor", ""))}">{app.field_error(erros, "valor")}</label>
+    <div class="title-action"><button type="submit" name="pesquisar" value="1">Pesquisar</button></div>
+    {aviso_busca}
+  </form>
   <div class="panel-head"><h2>Títulos gerados</h2><span>{app.esc(app.count_label(len(rows)))}</span></div>
   <form id="baixa" class="baixa-bar" method="post" action="{TITULOS_PATH}" onsubmit="return confirm('Confirmar a baixa?')">
     <input type="hidden" name="acao" value="baixar">
-    <input type="hidden" name="q" value="{app.esc(q)}">
+    {ocultos}
     <div class="baixa-fields">
       <label>Data da baixa<input name="data_baixa" placeholder="dd/mm/aaaa" value="{app.esc(data_valor)}">{app.field_error(errors, "data_baixa")}</label>
       <label>Forma<select name="forma_pagamento_id">{opcoes(formas, baixa.get("forma", ""), "Selecione")}</select>{app.field_error(errors, "forma_pagamento_id")}</label>
@@ -1777,10 +1864,7 @@ if (marcar) marcar.addEventListener("change", () => {{
 }});
 </script>
 """
-    return app.page(
-        "Títulos", body, logged=True, current=TITULOS_PATH,
-        search={"action": TITULOS_PATH, "q": q, "placeholder": "Pessoa ou documento"},
-    )
+    return app.page("Títulos", body, logged=True, current=TITULOS_PATH)
 
 
 def filtros_do_relatorio(source: dict) -> dict:
@@ -1914,20 +1998,20 @@ def handle_relatorio_get(handler, status: str) -> None:
 def handle_titulos_get(handler) -> None:
     app = ui()
     params = handler.query()
-    q = params.get("q", "").strip()[:80]
+    filtros, erros, pesquisou = pesquisa_de_titulos(params)
     n = params.get("n", "")
     aviso = ""
     if params.get("aviso") == "baixado" and n.isdigit():
         aviso = "1 título baixado." if n == "1" else f"{n} títulos baixados."
     with app.connect() as conn:
-        rows = listar_titulos(conn, q)
-        payload = titulos_page(conn, rows, q, aviso, "", {"data": hoje_br()})
+        rows = listar_titulos(conn, filtros) if pesquisou and not erros else []
+        payload = titulos_page(conn, rows, filtros, erros, aviso, "", {"data": hoje_br()}, pesquisou)
     handler.send_html(200, payload)
 
 
 def handle_titulos_post(handler, form: dict) -> None:
     app = ui()
-    q = str(form.get("q", "") or "").strip()[:80]
+    filtros, erros_busca, pesquisou = pesquisa_de_titulos(form)
     baixa = {
         "data": str(form.get("data_baixa", "") or "").strip(),
         "forma": str(form.get("forma_pagamento_id", "") or "").strip(),
@@ -1943,11 +2027,15 @@ def handle_titulos_post(handler, form: dict) -> None:
         baixa["errors"]["forma_pagamento_id"] = "Escolha a forma de pagamento ou recebimento."
     elif app.parse_record_id(baixa["conta_id"]) is None:
         baixa["errors"]["conta_id"] = "Escolha a conta."
+
+    def responder(conn, status: int, erro: str = "") -> None:
+        rows = listar_titulos(conn, filtros) if pesquisou and not erros_busca else []
+        payload = titulos_page(conn, rows, filtros, erros_busca, "", erro, baixa, pesquisou)
+        handler.send_html(status, payload)
+
     if baixa["errors"]:
         with app.connect() as conn:
-            rows = listar_titulos(conn, q)
-            payload = titulos_page(conn, rows, q, "", "", baixa)
-        handler.send_html(400, payload)
+            responder(conn, 400)
         return
     with app.connect() as conn:
         forma = conn.execute(
@@ -1955,9 +2043,7 @@ def handle_titulos_post(handler, form: dict) -> None:
         ).fetchone()
         if forma is None:
             baixa["errors"]["forma_pagamento_id"] = "Escolha a forma de pagamento ou recebimento."
-            rows = listar_titulos(conn, q)
-            payload = titulos_page(conn, rows, q, "", "", baixa)
-            handler.send_html(400, payload)
+            responder(conn, 400)
             return
         conta = conn.execute(
             """
@@ -1968,9 +2054,7 @@ def handle_titulos_post(handler, form: dict) -> None:
         ).fetchone()
         if conta is None:
             baixa["errors"]["conta_id"] = "Escolha uma conta cadastrada."
-            rows = listar_titulos(conn, q)
-            payload = titulos_page(conn, rows, q, "", "", baixa)
-            handler.send_html(400, payload)
+            responder(conn, 400)
             return
         rotulo = app.rotulo_conta(conta[1], conta[2], conta[3], conta[5], conta[6], conta[4])
         atualizados = conn.execute(
@@ -1983,11 +2067,11 @@ def handle_titulos_post(handler, form: dict) -> None:
         ).rowcount
         conn.commit()
         if not atualizados:
-            rows = listar_titulos(conn, q)
-            payload = titulos_page(conn, rows, q, "", "Nenhum título em aberto para baixar.", baixa)
-            handler.send_html(400, payload)
+            responder(conn, 400, "Nenhum título em aberto para baixar.")
             return
-    destino = TITULOS_PATH + "?" + urlencode({"aviso": "baixado", "n": str(atualizados), "q": q})
+    destino = TITULOS_PATH + "?" + query_filtros(
+        filtros, aviso="baixado", n=str(atualizados), pesquisar="1"
+    )
     handler.redirect(destino)
 
 
