@@ -831,6 +831,8 @@ html[data-theme="dark"] .error { color: #ffb4b4; }
 .finance-desk form.finance-form > label,
 .finance-desk form.finance-form > .campo { min-width: 0; max-width: 100%; }
 .finance-desk .span-2 { grid-column: span 2; }
+.finance-desk .plano-campo { grid-column: 1 / span 3; }
+.finance-desk .centro-campo { grid-column: 4 / span 3; }
 .finance-desk input, .finance-desk select { padding: 7px 10px; }
 .finance-desk form.finance-form input:not([type="radio"]):not([type="checkbox"]):not([type="file"]):not([type="hidden"]),
 .finance-desk form.finance-form select {
@@ -840,6 +842,8 @@ html[data-theme="dark"] .error { color: #ffb4b4; }
 }
 @media (max-width: 1180px) {
   .finance-desk form.finance-form { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .finance-desk .plano-campo,
+  .finance-desk .centro-campo { grid-column: 1 / span 3; }
 }
 .finance-origem { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; color: var(--ink); min-width: 0; }
 .finance-origem label { display: flex; flex-direction: row; align-items: center; gap: 4px; color: var(--ink); white-space: nowrap; }
@@ -2665,6 +2669,7 @@ class Handler(BaseHTTPRequestHandler):
         erro = {
             "selecione": "Selecione um registro na grade.",
             "ausente": "Registro não encontrado.",
+            "uso": "Este centro de custo está em contas a pagar e não pode ser excluído.",
         }.get(params.get("erro", ""), "")
         editor = None
         with connect() as conn:
@@ -2712,11 +2717,15 @@ class Handler(BaseHTTPRequestHandler):
             if item_id is None:
                 self.redirect(centros_url(q=q, erro="selecione"))
                 return
-            with connect() as conn:
-                deleted = conn.execute(
-                    "DELETE FROM centro_custo WHERE id = %s", (item_id,)
-                ).rowcount
-                conn.commit()
+            try:
+                with connect() as conn:
+                    deleted = conn.execute(
+                        "DELETE FROM centro_custo WHERE id = %s", (item_id,)
+                    ).rowcount
+                    conn.commit()
+            except psycopg.Error:
+                self.redirect(centros_url(q=q, erro="uso"))
+                return
             if not deleted:
                 self.redirect(centros_url(q=q, erro="ausente"))
                 return
@@ -2939,6 +2948,7 @@ class Handler(BaseHTTPRequestHandler):
         erro = {
             "selecione": "Selecione um registro na grade.",
             "ausente": "Registro não encontrado.",
+            "uso": "Esta conta do plano está em contas a pagar e não pode ser excluída.",
         }.get(params.get("erro", ""), "")
         editor = None
         with connect() as conn:
@@ -2986,9 +2996,13 @@ class Handler(BaseHTTPRequestHandler):
             if item_id is None:
                 self.redirect(plano_url(q=q, erro="selecione"))
                 return
-            with connect() as conn:
-                deleted = conn.execute("DELETE FROM plano_conta WHERE id = %s", (item_id,)).rowcount
-                conn.commit()
+            try:
+                with connect() as conn:
+                    deleted = conn.execute("DELETE FROM plano_conta WHERE id = %s", (item_id,)).rowcount
+                    conn.commit()
+            except psycopg.Error:
+                self.redirect(plano_url(q=q, erro="uso"))
+                return
             if not deleted:
                 self.redirect(plano_url(q=q, erro="ausente"))
                 return

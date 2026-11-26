@@ -241,3 +241,16 @@ CREATE UNIQUE INDEX IF NOT EXISTS plano_conta_nome_lower_idx
     ON plano_conta (lower(nome));
 
 CREATE INDEX IF NOT EXISTS lancamento_natureza_idx ON lancamento (natureza, id);
+
+ALTER TABLE lancamento ADD COLUMN IF NOT EXISTS plano_conta_id bigint REFERENCES plano_conta (id);
+
+ALTER TABLE lancamento ADD COLUMN IF NOT EXISTS centro_custo_id bigint REFERENCES centro_custo (id);
+
+ALTER TABLE titulo ADD COLUMN IF NOT EXISTS plano_conta_id bigint REFERENCES plano_conta (id);
+
+ALTER TABLE titulo ADD COLUMN IF NOT EXISTS centro_custo_id bigint REFERENCES centro_custo (id);
+
+CREATE TABLE IF NOT EXISTS documento_sequencia (
+    prefixo text PRIMARY KEY,
+    ultimo bigint NOT NULL
+);
