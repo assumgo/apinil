@@ -2,6 +2,10 @@
 
 O número publicado no site fica em `VERSION` e em `public/version.txt`. Cada versão estável recebe uma tag `vX.Y.Z` e um release no GitHub.
 
+## 0.9.12 — 2026-11-26
+
+- Em Títulos, a pesquisa pede vencimento, natureza, pessoa ou valor, e exige ao menos um desses itens. A grade abre vazia e só mostra títulos depois de Pesquisar.
+
 ## 0.9.11 — 2026-11-25
 
 - O cadastro de contas distingue caixa interno e conta externa. A conta externa usa a relação oficial de bancos do Banco Central, agência com dígito, nome da agência e número com dígito, e informa se é poupança ou corrente.

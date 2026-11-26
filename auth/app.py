@@ -940,6 +940,23 @@ html[data-theme="dark"] button.link-danger { color: #ffb4b4; }
 .report-action button {
   box-sizing: border-box; height: 40px; margin: 0; padding: 0 16px; white-space: nowrap;
 }
+.title-filters {
+  display: grid;
+  grid-template-columns: minmax(0, .9fr) minmax(0, .9fr) minmax(0, .75fr) minmax(0, 1.3fr) minmax(0, .75fr) auto;
+  gap: 8px 12px;
+  align-items: start;
+  margin: 0 0 12px;
+}
+.title-filters > label { min-width: 0; max-width: 100%; }
+.title-filters input, .title-filters select {
+  width: 100%; min-width: 0; max-width: 100%; box-sizing: border-box; height: 40px; padding: 8px 10px;
+}
+.title-filters .error { display: block; margin-top: 4px; }
+.title-filters .busca-erro { grid-column: 1 / -1; margin: 0; }
+.title-action { padding-top: 24px; }
+.title-action button {
+  box-sizing: border-box; height: 40px; min-width: 132px; margin: 0; padding: 0 16px; white-space: nowrap; width: auto;
+}
 .eyebrow.section-gap { margin-top: 22px; }
 .pill { display: inline-block; background: #e5f6ea; color: #114d2c; border-radius: 999px; padding: 3px 10px; font-size: 12px; font-weight: 700; white-space: nowrap; }
 .pill.off { background: #fdecec; color: #8d2b2b; }
@@ -955,12 +972,16 @@ html[data-theme="dark"] .pill.off { background: #4a2424; color: #ffd0d0; }
 dialog.modal { border: 0; border-radius: 16px; padding: 24px; max-width: 420px; box-shadow: var(--shadow); }
 dialog.modal::backdrop { background: rgba(16, 32, 24, .45); }
 dialog.modal h2 { margin: 0 0 8px; }
+@media (max-width: 1280px) {
+  .title-filters { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
 @media (max-width: 980px) {
   .menu-btn { display: grid; }
   .app-side { transform: translateX(-105%); transition: transform .2s ease; z-index: 20; }
   .app-side.is-open { transform: none; }
   .app-main { margin-left: 0; }
-  .split, .split.wide-form, .baixa-fields, .report-filters { grid-template-columns: 1fr 1fr; }
+  .split, .split.wide-form, .baixa-fields, .report-filters, .title-filters { grid-template-columns: 1fr 1fr; }
+  .title-action { grid-column: 1 / -1; padding-top: 0; }
   .baixa-action { padding-top: 24px; }
   .parcela { grid-template-columns: 1fr; }
   .app-top { padding: 12px; }
