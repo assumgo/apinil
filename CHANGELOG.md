@@ -2,6 +2,11 @@
 
 O número publicado no site fica em `VERSION` e em `public/version.txt`. Cada versão estável recebe uma tag `vX.Y.Z` e um release no GitHub.
 
+## 0.9.16 — 2026-11-27
+
+- A tela de pessoas deixa o cadastro mais estreito e amplia a lista de pessoas cadastradas.
+- Nova pessoa ganha a identificação do PIX: tipo de chave, chave e nome da instituição. Os tipos são CPF, CNPJ, e-mail, telefone e chave aleatória.
+
 ## 0.9.15 — 2026-11-27
 
 - Contas a pagar e contas a receber abrem com as grades vazias. Pesquisar lista as contas, em até seis linhas visíveis, e Limpar zera a pesquisa e as parcelas. A grade de parcelas só é preenchida ao selecionar uma conta. O quadro de nova entrada fica mais baixo.

@@ -102,10 +102,14 @@ CREATE TABLE IF NOT EXISTS pessoa (
     nome text NOT NULL,
     fantasia text NOT NULL DEFAULT '',
     papel text NOT NULL,
+    pix_tipo text NOT NULL DEFAULT '',
+    pix_chave text NOT NULL DEFAULT '',
+    pix_instituicao text NOT NULL DEFAULT '',
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
     CONSTRAINT pessoa_tipo_chk CHECK (tipo IN ('F', 'J')),
-    CONSTRAINT pessoa_papel_chk CHECK (papel IN ('fornecedor', 'cliente', 'ambos'))
+    CONSTRAINT pessoa_papel_chk CHECK (papel IN ('fornecedor', 'cliente', 'ambos')),
+    CONSTRAINT pessoa_pix_tipo_chk CHECK (pix_tipo IN ('', 'cpf', 'cnpj', 'email', 'telefone', 'aleatoria'))
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS pessoa_documento_idx ON pessoa (documento);
