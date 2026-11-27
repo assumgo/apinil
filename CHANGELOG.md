@@ -2,6 +2,12 @@
 
 O número publicado no site fica em `VERSION` e em `public/version.txt`. Cada versão estável recebe uma tag `vX.Y.Z` e um release no GitHub.
 
+## 0.9.14 — 2026-11-27
+
+- A tela de início mostra, em aberto e baixado, o total a pagar e a receber do dia, da semana e do mês, os vencidos, o saldo previsto do mês e os dez títulos pendentes de cada lado.
+- O menu ganha Backups. Dá para criar, baixar e restaurar o banco, e a tela de início lista os cinco últimos. Um backup automático é feito uma vez por dia.
+- O menu Relatórios ganha Histórico, com inclusão, alteração, visualização e exclusão. A tela de início resume as dez últimas alterações.
+
 ## 0.9.13 — 2026-11-26
 
 - Contas a pagar pede plano de contas e centro de custo, e grava os dois no lançamento e no título.

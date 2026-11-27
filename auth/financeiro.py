@@ -1819,12 +1819,14 @@ def ids_marcados(form: dict) -> list[int]:
 
 
 def filtros_dos_titulos(source: dict) -> dict:
+    situacao = (source.get("situacao") or "").strip()
     return {
         "vencimento_de": (source.get("vencimento_de") or "").strip()[:10],
         "vencimento_ate": (source.get("vencimento_ate") or "").strip()[:10],
         "natureza": (source.get("natureza") or "").strip(),
         "pessoa": (source.get("pessoa") or "").strip()[:80],
         "valor": (source.get("valor") or "").strip()[:20],
+        "situacao": situacao if situacao in ("aberto", "baixado") else "",
     }
 
 
@@ -1883,6 +1885,9 @@ def listar_titulos(conn, filtros: dict):
     if valor is not None:
         clauses.append("t.valor = %s")
         params.append(valor)
+    if filtros.get("situacao") in ("aberto", "baixado"):
+        clauses.append("t.status = %s")
+        params.append(filtros["situacao"])
     return conn.execute(
         TITULOS_SQL + " WHERE " + " AND ".join(clauses) + " ORDER BY t.vencimento, t.id",
         params,
@@ -1951,13 +1956,20 @@ def titulos_page(conn, rows, filtros: dict, erros: dict, aviso: str, erro: str, 
     )
     ocultos = "".join(
         f'<input type="hidden" name="{chave}" value="{app.esc(filtros.get(chave, ""))}">'
-        for chave in ("vencimento_de", "vencimento_ate", "natureza", "pessoa", "valor")
+        for chave in ("vencimento_de", "vencimento_ate", "natureza", "pessoa", "valor", "situacao")
     )
     if pesquisou:
         ocultos += '<input type="hidden" name="pesquisar" value="1">'
     aviso_busca = (
         f'<p class="error busca-erro">{app.esc(erros["busca"])}</p>' if erros.get("busca") else ""
     )
+    situacao = filtros.get("situacao", "")
+    if situacao == "aberto":
+        recorte = '<p class="hint">A lista está restrita aos títulos em aberto.</p>'
+    elif situacao == "baixado":
+        recorte = '<p class="hint">A lista está restrita aos títulos baixados.</p>'
+    else:
+        recorte = ""
     body = f"""
 <header class="page-head">
   <p class="eyebrow">FINANCEIRO</p>
@@ -1974,7 +1986,9 @@ def titulos_page(conn, rows, filtros: dict, erros: dict, aviso: str, erro: str, 
     <label>Valor<input name="valor" inputmode="decimal" placeholder="0,00" value="{app.esc(filtros.get("valor", ""))}">{app.field_error(erros, "valor")}</label>
     <div class="title-action"><button type="submit" name="pesquisar" value="1">Pesquisar</button></div>
     {aviso_busca}
+    {f'<input type="hidden" name="situacao" value="{app.esc(situacao)}">' if situacao else ""}
   </form>
+  {recorte}
   <div class="panel-head"><h2>Títulos gerados</h2><span>{app.esc(app.count_label(len(rows)))}</span></div>
   <form id="baixa" class="baixa-bar" method="post" action="{TITULOS_PATH}" onsubmit="return confirm('Confirmar a baixa?')">
     <input type="hidden" name="acao" value="baixar">
@@ -2222,6 +2236,13 @@ def handle_arquivo_get(handler) -> None:
         handler.send_html(404, app.page("Arquivo", "<h1>Arquivo não encontrado</h1>", logged=True))
         return
     nome = re.sub(r"[^A-Za-z0-9._-]", "_", row[0] or "arquivo")
+    usuario = app.VIEWER.get()
+    if usuario:
+        from painel import registrar_direto
+        registrar_direto(
+            usuario, "visualizacao", "Arquivo do lançamento", str(item_id),
+            "Abriu o arquivo do lançamento", app.client_ip(handler),
+        )
     body = bytes(row[2])
     handler.send_response(200)
     handler.send_header("Content-Type", row[1] or "application/octet-stream")
