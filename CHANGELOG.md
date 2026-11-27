@@ -2,6 +2,12 @@
 
 O número publicado no site fica em `VERSION` e em `public/version.txt`. Cada versão estável recebe uma tag `vX.Y.Z` e um release no GitHub.
 
+## 0.9.15 — 2026-11-27
+
+- Contas a pagar e contas a receber abrem com as grades vazias. Pesquisar lista as contas, em até seis linhas visíveis, e Limpar zera a pesquisa e as parcelas. A grade de parcelas só é preenchida ao selecionar uma conta. O quadro de nova entrada fica mais baixo.
+- O menu ganha Recibos, abaixo de Contas a receber. O formulário grava recibo ou promissória (REC ou PRO), gera o ID e, se o número vier vazio, usa esse ID. A gravação cria a entrada em contas a pagar e mostra o ID, o número, o fornecedor, o valor e a quantidade de parcelas.
+- Valor negativo e vencimento anterior a hoje pedem confirmação antes de gravar, em contas a pagar e em recibos.
+
 ## 0.9.14 — 2026-11-27
 
 - A tela de início mostra, em aberto e baixado, o total a pagar e a receber do dia, da semana e do mês, os vencidos, o saldo previsto do mês e os dez títulos pendentes de cada lado.
