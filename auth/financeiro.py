@@ -27,6 +27,13 @@ CEP_PATH = "/restrito/cep"
 ARQUIVO_PATH = "/restrito/lancamentos/arquivo"
 
 PAPEIS = (("fornecedor", "Fornecedor"), ("cliente", "Cliente"), ("ambos", "Ambos"))
+PIX_TIPOS = (
+    ("cpf", "CPF"),
+    ("cnpj", "CNPJ"),
+    ("email", "E-mail"),
+    ("telefone", "Telefone"),
+    ("aleatoria", "Chave aleatória"),
+)
 CONTATOS = (
     ("fixo", "Telefone fixo", False),
     ("celular", "Celular", False),
@@ -72,6 +79,49 @@ def valid_cnpj(digits: str) -> bool:
     first = [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]
     second = [6, *first]
     return dv(digits[:12], first) == int(digits[12]) and dv(digits[:13], second) == int(digits[13])
+
+
+def normalizar_pix(tipo: str, chave: str) -> str | None:
+    tipo = (tipo or "").strip()
+    texto = (chave or "").strip()
+    if tipo == "cpf":
+        digits = only_digits(texto)
+        return digits if valid_cpf(digits) else None
+    if tipo == "cnpj":
+        digits = only_digits(texto)
+        return digits if valid_cnpj(digits) else None
+    if tipo == "email":
+        email = texto.casefold()
+        if EMAIL_RE.fullmatch(email) and len(email) <= 77:
+            return email
+        return None
+    if tipo == "telefone":
+        digits = only_digits(texto)
+        if digits.startswith("55") and len(digits) in (12, 13):
+            digits = digits[2:]
+        if len(digits) not in (10, 11):
+            return None
+        return "+55" + digits
+    if tipo == "aleatoria":
+        hexes = texto.lower().replace("-", "")
+        if not re.fullmatch(r"[0-9a-f]{32}", hexes):
+            return None
+        return f"{hexes[:8]}-{hexes[8:12]}-{hexes[12:16]}-{hexes[16:20]}-{hexes[20:]}"
+    return None
+
+
+def format_pix_chave(tipo: str, chave: str) -> str:
+    if tipo in ("cpf", "cnpj"):
+        return format_documento(only_digits(chave))
+    if tipo == "telefone":
+        digits = only_digits(chave)
+        if digits.startswith("55"):
+            digits = digits[2:]
+        if len(digits) == 11:
+            return f"+55 ({digits[:2]}) {digits[2:7]}-{digits[7:]}"
+        if len(digits) == 10:
+            return f"+55 ({digits[:2]}) {digits[2:6]}-{digits[6:]}"
+    return chave or ""
 
 
 def format_documento(digits: str) -> str:
@@ -470,6 +520,9 @@ def blank_pessoa() -> dict:
         "nome": "",
         "fantasia": "",
         "papel": "cliente",
+        "pix_tipo": "",
+        "pix_chave": "",
+        "pix_instituicao": "",
         "contatos": {},
         "enderecos": {},
         "errors": {},
@@ -485,6 +538,9 @@ def pessoa_from_form(form: dict) -> dict:
     editor["nome"] = " ".join(form.get("nome", "").split())
     editor["fantasia"] = " ".join(form.get("fantasia", "").split())
     editor["papel"] = form.get("papel", "")
+    editor["pix_tipo"] = form.get("pix_tipo", "").strip()
+    editor["pix_chave"] = form.get("pix_chave", "").strip()
+    editor["pix_instituicao"] = " ".join(form.get("pix_instituicao", "").split())[:120]
     editor["titulo"] = "Editar pessoa" if editor["id"] else "Nova pessoa"
     for key, _label, _email in CONTATOS:
         editor["contatos"][key] = form.get(f"contato_{key}", "").strip()
@@ -517,6 +573,19 @@ def validate_pessoa(editor: dict) -> dict[str, str]:
         errors["fantasia"] = "Use no máximo 160 caracteres."
     if editor["papel"] not in {item[0] for item in PAPEIS}:
         errors["papel"] = "Classifique como fornecedor, cliente ou ambos."
+    pix_tipo = editor.get("pix_tipo") or ""
+    pix_chave = editor.get("pix_chave") or ""
+    pix_instituicao = editor.get("pix_instituicao") or ""
+    if pix_tipo and pix_tipo not in {item[0] for item in PIX_TIPOS}:
+        errors["pix_tipo"] = "Escolha um tipo de chave PIX."
+    elif (pix_chave or pix_instituicao) and not pix_tipo:
+        errors["pix_tipo"] = "Escolha o tipo da chave PIX."
+    elif pix_tipo and not pix_chave:
+        errors["pix_chave"] = "Informe a chave PIX."
+    elif pix_tipo and normalizar_pix(pix_tipo, pix_chave) is None:
+        errors["pix_chave"] = "A chave PIX não confere com o tipo escolhido."
+    if len(pix_instituicao) > 120:
+        errors["pix_instituicao"] = "Use no máximo 120 caracteres."
     for key, label, is_email in CONTATOS:
         value = editor["contatos"].get(key, "")
         if not value:
@@ -563,7 +632,10 @@ def list_pessoas(conn, q: str):
 
 def load_pessoa(conn, item_id: int) -> dict | None:
     row = conn.execute(
-        "SELECT id, tipo, documento, nome, fantasia, papel FROM pessoa WHERE id = %s",
+        """
+        SELECT id, tipo, documento, nome, fantasia, papel, pix_tipo, pix_chave, pix_instituicao
+        FROM pessoa WHERE id = %s
+        """,
         (item_id,),
     ).fetchone()
     if row is None:
@@ -576,6 +648,9 @@ def load_pessoa(conn, item_id: int) -> dict | None:
         "nome": row[3],
         "fantasia": row[4],
         "papel": row[5],
+        "pix_tipo": row[6] or "",
+        "pix_chave": format_pix_chave(row[6] or "", row[7] or ""),
+        "pix_instituicao": row[8] or "",
         "titulo": "Editar pessoa",
     })
     for tipo, valor in conn.execute(
@@ -604,23 +679,33 @@ def load_pessoa(conn, item_id: int) -> dict | None:
 def save_pessoa(conn, editor: dict) -> int:
     digits = only_digits(editor["documento"])
     item_id = ui().parse_record_id(editor["id"])
+    pix_tipo = editor.get("pix_tipo") or ""
+    pix_chave = normalizar_pix(pix_tipo, editor.get("pix_chave") or "") if pix_tipo else ""
+    pix_instituicao = editor.get("pix_instituicao") or ""
     if item_id:
         conn.execute(
             """
             UPDATE pessoa
-            SET tipo = %s, documento = %s, nome = %s, fantasia = %s, papel = %s, updated_at = now()
+            SET tipo = %s, documento = %s, nome = %s, fantasia = %s, papel = %s,
+                pix_tipo = %s, pix_chave = %s, pix_instituicao = %s, updated_at = now()
             WHERE id = %s
             """,
-            (editor["tipo"], digits, editor["nome"], editor["fantasia"], editor["papel"], item_id),
+            (
+                editor["tipo"], digits, editor["nome"], editor["fantasia"], editor["papel"],
+                pix_tipo, pix_chave or "", pix_instituicao, item_id,
+            ),
         )
     else:
         item_id = conn.execute(
             """
-            INSERT INTO pessoa (tipo, documento, nome, fantasia, papel)
-            VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO pessoa (tipo, documento, nome, fantasia, papel, pix_tipo, pix_chave, pix_instituicao)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
-            (editor["tipo"], digits, editor["nome"], editor["fantasia"], editor["papel"]),
+            (
+                editor["tipo"], digits, editor["nome"], editor["fantasia"], editor["papel"],
+                pix_tipo, pix_chave or "", pix_instituicao,
+            ),
         ).fetchone()[0]
     conn.execute("DELETE FROM pessoa_contato WHERE pessoa_id = %s", (item_id,))
     for key, _label, _email in CONTATOS:
@@ -714,6 +799,12 @@ def pessoas_page(rows, q: str, aviso: str, erro: str, editor: dict) -> bytes:
     <label id="label-nome">{nome_label}<input name="nome" maxlength="160" value="{app.esc(editor.get("nome", ""))}">{app.field_error(errors, "nome")}</label>
     <label id="label-fantasia">{fantasia_label}<input name="fantasia" maxlength="160" value="{app.esc(editor.get("fantasia", ""))}">{app.field_error(errors, "fantasia")}</label>
     <label>Classificação<select name="papel">{''.join(papel_options)}</select>{app.field_error(errors, "papel")}</label>
+    <div class="pix-box">
+      <h3>PIX</h3>
+      <label>Tipo de chave<select name="pix_tipo" id="pix-tipo">{opcoes([(valor, rotulo, "") for valor, rotulo in PIX_TIPOS], editor.get("pix_tipo", ""), "Selecione")}</select>{app.field_error(errors, "pix_tipo")}</label>
+      <label>Chave<input name="pix_chave" id="pix-chave" maxlength="120" value="{app.esc(editor.get("pix_chave", ""))}">{app.field_error(errors, "pix_chave")}</label>
+      <label>Nome da instituição<input name="pix_instituicao" maxlength="120" value="{app.esc(editor.get("pix_instituicao", ""))}">{app.field_error(errors, "pix_instituicao")}</label>
+    </div>
   </div>
   <div class="tab-panel {'is-on' if open_tab == 'contato' else ''}" data-panel="contato">{''.join(contacts)}</div>
   <div class="tab-panel {'is-on' if open_tab == 'enderecos' else ''}" data-panel="enderecos">{''.join(addresses)}</div>
@@ -733,6 +824,23 @@ function tipoPessoa() {{
   document.getElementById("label-fantasia").childNodes[0].textContent = juridica ? "Nome fantasia" : "Nome";
 }}
 document.querySelectorAll('input[name="tipo"]').forEach((input) => input.addEventListener("change", tipoPessoa));
+const pixDicas = {{
+  cpf: "000.000.000-00",
+  cnpj: "00.000.000/0000-00",
+  email: "nome@exemplo.com",
+  telefone: "+55 11 99999-9999",
+  aleatoria: "00000000-0000-0000-0000-000000000000"
+}};
+const pixTipo = document.getElementById("pix-tipo");
+const pixChave = document.getElementById("pix-chave");
+function dicaPix() {{
+  if (!pixTipo || !pixChave) return;
+  pixChave.placeholder = pixDicas[pixTipo.value] || "";
+}}
+if (pixTipo) {{
+  pixTipo.addEventListener("change", dicaPix);
+  dicaPix();
+}}
 document.getElementById("buscar-receita").addEventListener("click", async () => {{
   const documento = document.querySelector('[name="documento"]').value;
   const resposta = await fetch("{CONSULTA_PATH}?documento=" + encodeURIComponent(documento));
@@ -790,9 +898,9 @@ document.querySelectorAll("[data-buscar-cep]").forEach((button) => {{
   <p class="lede">O mesmo formulário serve para pessoa física e jurídica. O CPF ou CNPJ é a chave única.</p>
 </header>
 {app.flashes_html(aviso, erro)}
-<div class="split wide-form">
-  <section class="panel"><h2>{app.esc(editor["titulo"])}</h2>{form}</section>
-  <section class="panel">
+<div class="pessoa-desk">
+  <section class="panel pessoa-form"><h2>{app.esc(editor["titulo"])}</h2>{form}</section>
+  <section class="panel pessoa-lista">
     <div class="panel-head"><h2>Pessoas cadastradas</h2><span>{app.esc(app.count_label(len(rows)))}</span></div>
     <div class="grid-wrap">{table}</div>
   </section>

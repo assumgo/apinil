@@ -364,6 +364,7 @@ def migrate_and_seed() -> None:
         seed_formas_pagamento(conn)
         seed_condicoes_pagamento(conn)
         migrate_contas(conn)
+        migrate_pessoa_pix(conn)
         conn.commit()
 
 
@@ -802,6 +803,45 @@ html[data-theme="dark"] .error { color: #ffb4b4; }
 .addr h3 { margin: 0; font-size: 15px; }
 .hint { margin: 0; color: var(--muted); font-size: 13px; }
 .split.wide-form { grid-template-columns: minmax(440px, 1.2fr) minmax(280px, .8fr); }
+.pessoa-desk {
+  display: grid;
+  grid-template-columns: minmax(300px, 380px) minmax(0, 1fr);
+  gap: 12px;
+  align-items: stretch;
+}
+.pessoa-desk > .panel { min-width: 0; }
+.pessoa-desk .pessoa-form { padding: 12px 14px; }
+.pessoa-desk .pessoa-form > h2 { margin: 0 0 8px; font-size: 16px; }
+.pessoa-desk .pessoa-lista {
+  display: flex;
+  flex-direction: column;
+  min-height: calc(100vh - 188px);
+}
+.pessoa-desk .pessoa-lista .grid-wrap { flex: 1; overflow: auto; }
+.pessoa-desk .tab-panel { gap: 8px; }
+.pessoa-desk .pessoa-form input:not([type="radio"]):not([type="checkbox"]),
+.pessoa-desk .pessoa-form select { height: 34px; padding: 4px 8px; }
+.pessoa-desk .pix-box {
+  display: grid;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+.pessoa-desk .pix-box h3 {
+  margin: 0;
+  font-size: 12px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.pessoa-lista td:first-child { white-space: nowrap; }
+.pessoa-lista td:last-child, .pessoa-lista th:last-child { width: 112px; white-space: nowrap; }
+.pessoa-lista .row-actions { flex-wrap: nowrap; }
+@media (max-width: 1280px) {
+  .pessoa-desk { grid-template-columns: 1fr; }
+  .pessoa-desk .pessoa-form { max-width: 420px; }
+  .pessoa-desk .pessoa-lista { min-height: 520px; }
+}
 .parcelas { display: grid; gap: 8px; }
 .parcela { display: grid; grid-template-columns: 72px 1fr 1fr; gap: 8px; align-items: end; }
 .app-content:has(.finance-desk) { padding-bottom: 16px; }
@@ -1105,6 +1145,9 @@ html[data-theme="dark"] .backup-latest { background: #1c3a2c; }
   .app-side.is-open { transform: none; }
   .app-main { margin-left: 0; }
   .split, .split.wide-form, .baixa-fields, .report-filters, .title-filters, .history-filters { grid-template-columns: 1fr 1fr; }
+  .pessoa-desk { grid-template-columns: 1fr; }
+  .pessoa-desk .pessoa-form { max-width: none; }
+  .pessoa-desk .pessoa-lista { min-height: 420px; }
   .home-metrics, .home-split, .vencidos-cols, .backup-item { grid-template-columns: 1fr; }
   .vencidos-cols > div:last-child, .backup-actions, .app-body form.inline-form { text-align: left; justify-content: flex-start; }
   .metric-main strong { font-size: 26px; }
@@ -1420,6 +1463,20 @@ def validate_centro(codigo: str, nome: str, descricao: str) -> dict[str, str]:
     elif len(descricao) > 200:
         errors["descricao"] = "A descrição pode ter no máximo 200 caracteres."
     return errors
+
+
+def migrate_pessoa_pix(conn) -> None:
+    conn.execute("ALTER TABLE pessoa ADD COLUMN IF NOT EXISTS pix_tipo text NOT NULL DEFAULT ''")
+    conn.execute("ALTER TABLE pessoa ADD COLUMN IF NOT EXISTS pix_chave text NOT NULL DEFAULT ''")
+    conn.execute("ALTER TABLE pessoa ADD COLUMN IF NOT EXISTS pix_instituicao text NOT NULL DEFAULT ''")
+    conn.execute("ALTER TABLE pessoa DROP CONSTRAINT IF EXISTS pessoa_pix_tipo_chk")
+    conn.execute(
+        """
+        ALTER TABLE pessoa
+        ADD CONSTRAINT pessoa_pix_tipo_chk
+        CHECK (pix_tipo IN ('', 'cpf', 'cnpj', 'email', 'telefone', 'aleatoria'))
+        """
+    )
 
 
 def migrate_contas(conn) -> None:
