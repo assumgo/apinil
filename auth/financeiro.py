@@ -20,6 +20,7 @@ import psycopg
 PESSOAS_PATH = "/restrito/cadastros/pessoas"
 PAGAR_PATH = "/restrito/contas-a-pagar"
 RECEBER_PATH = "/restrito/contas-a-receber"
+RECIBOS_PATH = "/restrito/recibos"
 TITULOS_PATH = "/restrito/titulos"
 CONSULTA_PATH = "/restrito/cadastros/pessoas/consulta"
 CEP_PATH = "/restrito/cep"
@@ -82,7 +83,19 @@ def format_documento(digits: str) -> str:
 
 
 def parse_valor(value: str) -> Decimal | None:
+    number = parse_valor_assinado(value)
+    if number is None or number <= 0:
+        return None
+    return number
+
+
+def parse_valor_assinado(value: str) -> Decimal | None:
     text = (value or "").strip().replace("R$", "").replace(" ", "")
+    if not text:
+        return None
+    negativo = text.startswith("-")
+    if negativo:
+        text = text[1:]
     if not text:
         return None
     if "," in text:
@@ -93,24 +106,30 @@ def parse_valor(value: str) -> Decimal | None:
         number = Decimal(text)
     except InvalidOperation:
         return None
-    if number <= 0 or number > Decimal("999999999999.99"):
+    if number == 0 or number > Decimal("999999999999.99"):
         return None
-    return number.quantize(Decimal("0.01"))
+    number = number.quantize(Decimal("0.01"))
+    return -number if negativo else number
 
 
 def format_valor(value) -> str:
     if isinstance(value, Decimal):
         number = value.quantize(Decimal("0.01"))
     else:
-        number = parse_valor(str(value or ""))
+        number = parse_valor_assinado(str(value or ""))
         if number is None:
             return ""
-    inteiro, frac = f"{number:.2f}".split(".")
+    sinal = "-" if number < 0 else ""
+    inteiro, frac = f"{abs(number):.2f}".split(".")
     grupos = []
     while inteiro:
         grupos.append(inteiro[-3:])
         inteiro = inteiro[:-3]
-    return ".".join(reversed(grupos)) + "," + frac
+    return sinal + ".".join(reversed(grupos)) + "," + frac
+
+
+def hoje_sp() -> date:
+    return datetime.now(ZoneInfo("America/Sao_Paulo")).date()
 
 
 def parse_data(value: str) -> date | None:
@@ -947,13 +966,13 @@ def blank_lancamento(natureza: str) -> dict:
         "condicao_pagamento_id": "",
         "qtde_parcelas": "1",
         "valor_total": "",
-        "data_emissao": format_data(date.today()),
+        "data_emissao": hoje_br(),
         "observacao": "",
         "arquivo_nome": "",
         "pessoa_documento": "",
         "pessoa_nome": "",
         "pessoa_rotulo": "",
-        "parcelas": [{"numero": 1, "valor": "", "vencimento": format_data(date.today())}],
+        "parcelas": [],
         "errors": {},
         "titulo": "Nova entrada",
     }
@@ -997,10 +1016,12 @@ def lancamento_from_form(form: dict, natureza: str) -> dict:
 def sugerir_parcelas(editor: dict, condicao_nome: str) -> list[dict]:
     qtde = int(editor["qtde_parcelas"]) if str(editor["qtde_parcelas"]).isdigit() else 1
     qtde = max(1, min(48, qtde))
-    total = parse_valor(str(editor["valor_total"])) or Decimal("0.00")
-    base = parse_data(editor.get("data_emissao", "")) or date.today()
+    total = parse_valor_assinado(str(editor["valor_total"]))
+    if total is None:
+        total = Decimal("0.00")
+    base = parse_data(editor.get("data_emissao", "")) or hoje_sp()
     dias = dias_da_condicao(condicao_nome, qtde)
-    valores = dividir_valor(total, qtde) if total > 0 else [Decimal("0.00")] * qtde
+    valores = dividir_valor(total, qtde) if total != 0 else [Decimal("0.00")] * qtde
     parcelas = []
     for numero, (valor, dia) in enumerate(zip(valores, dias), start=1):
         parcelas.append({
@@ -1024,7 +1045,7 @@ def validate_lancamento(editor: dict) -> dict[str, str]:
             errors["pessoa_id"] = "A nota não trouxe o nome do fornecedor ou do cliente."
     elif not str(editor["pessoa_id"]).isdigit():
         errors["pessoa_id"] = f"Escolha o {pessoa_rotulo}."
-    if editor.get("numero_automatico") and not editor["numero_documento"]:
+    if (editor.get("numero_opcional") or editor.get("numero_automatico")) and not editor["numero_documento"]:
         pass
     elif not editor["numero_documento"]:
         errors["numero_documento"] = "Informe o número do documento."
@@ -1041,7 +1062,7 @@ def validate_lancamento(editor: dict) -> dict[str, str]:
         errors["condicao_pagamento_id"] = "Escolha a condição de pagamento."
     if not editor["qtde_parcelas"].isdigit() or not 1 <= int(editor["qtde_parcelas"]) <= 48:
         errors["qtde_parcelas"] = "Informe de 1 a 48 parcelas."
-    total = parse_valor(editor["valor_total"])
+    total = parse_valor_assinado(editor["valor_total"])
     if total is None:
         errors["valor_total"] = "Informe o valor total."
     if parse_data(editor["data_emissao"]) is None:
@@ -1051,7 +1072,7 @@ def validate_lancamento(editor: dict) -> dict[str, str]:
         errors["parcelas"] = "Recalcule as parcelas antes de gerar os títulos."
     soma = Decimal("0.00")
     for parcela in editor["parcelas"]:
-        valor = parse_valor(str(parcela["valor"]))
+        valor = parse_valor_assinado(str(parcela["valor"]))
         if valor is None or parse_data(parcela["vencimento"]) is None:
             errors["parcelas"] = "Informe valor e vencimento em todas as parcelas."
             break
@@ -1160,7 +1181,114 @@ def filtros_da_busca(source: dict) -> dict:
         "valor": (source.get("valor") or "").strip()[:20],
         "pessoa": (source.get("pessoa") or "").strip()[:80],
         "q": (source.get("q") or "").strip()[:80],
+        "pesquisar": "1" if str(source.get("pesquisar") or "") == "1" else "",
     }
+
+
+def parcelas_sem_dados(parcelas) -> bool:
+    if not parcelas:
+        return True
+    return all(
+        not str(item.get("valor") or "").strip() and not str(item.get("vencimento") or "").strip()
+        for item in parcelas
+    )
+
+
+def numero_efetivo(numero: str, item_id: int) -> str:
+    texto = (numero or "").strip()
+    return texto[:40] if texto else str(item_id)
+
+
+def inconsistencias_lancamento(editor: dict, hoje: date | None = None) -> list[str]:
+    hoje = hoje or hoje_sp()
+    avisos = []
+    total = parse_valor_assinado(str(editor.get("valor_total") or ""))
+    if total is not None and total < 0:
+        avisos.append("O valor total está negativo.")
+    parcela_negativa = False
+    for parcela in editor.get("parcelas") or []:
+        valor = parse_valor_assinado(str(parcela.get("valor") or ""))
+        if valor is not None and valor < 0:
+            parcela_negativa = True
+        vencimento = parse_data(str(parcela.get("vencimento") or ""))
+        if vencimento is not None and vencimento < hoje:
+            avisos.append(f"O vencimento {format_data(vencimento)} é anterior a hoje.")
+    if parcela_negativa:
+        avisos.append("Há parcela com valor negativo.")
+    vistos = []
+    for aviso in avisos:
+        if aviso not in vistos:
+            vistos.append(aviso)
+    return vistos
+
+
+def nome_condicao(conn, editor: dict) -> str:
+    valor = str(editor.get("condicao_pagamento_id") or "")
+    if not valor.isdigit():
+        return ""
+    row = conn.execute("SELECT nome FROM condicao_pagamento WHERE id = %s", (int(valor),)).fetchone()
+    return row[0] if row else ""
+
+
+def conferir_referencias(conn, editor: dict) -> dict[str, str]:
+    errors = {}
+    tipo_id = str(editor.get("tipo_documento_id") or "")
+    if tipo_id.isdigit():
+        row = conn.execute(
+            "SELECT nome, descricao FROM tipo_documento WHERE id = %s",
+            (int(tipo_id),),
+        ).fetchone()
+        if row is None:
+            errors["tipo_documento_id"] = "Escolha um tipo de documento cadastrado."
+        elif editor.get("somente_recibo") and not prefixo_numero_automatico(row[0], row[1]):
+            errors["tipo_documento_id"] = "Escolha recibo (REC) ou promissória (PRO)."
+    pessoa_id = str(editor.get("pessoa_id") or "")
+    if pessoa_id.isdigit():
+        papel_alvo = "fornecedor" if editor.get("natureza") == "pagar" else "cliente"
+        row = conn.execute("SELECT papel FROM pessoa WHERE id = %s", (int(pessoa_id),)).fetchone()
+        if row is None or row[0] not in ("ambos", papel_alvo):
+            rotulo = "fornecedor" if papel_alvo == "fornecedor" else "cliente"
+            errors["pessoa_id"] = f"Escolha um {rotulo} cadastrado."
+    consultas = (
+        ("forma_pagamento_id", "forma_pagamento", "Escolha uma forma de pagamento cadastrada."),
+        ("condicao_pagamento_id", "condicao_pagamento", "Escolha uma condição de pagamento cadastrada."),
+    )
+    if editor.get("natureza") == "pagar":
+        consultas = consultas + (
+            ("plano_conta_id", "plano_conta", "Escolha um plano de contas cadastrado."),
+            ("centro_custo_id", "centro_custo", "Escolha um centro de custo cadastrado."),
+        )
+    for campo, tabela, mensagem in consultas:
+        valor = str(editor.get(campo) or "")
+        if not valor.isdigit():
+            continue
+        row = conn.execute(f"SELECT id FROM {tabela} WHERE id = %s", (int(valor),)).fetchone()
+        if row is None:
+            errors[campo] = mensagem
+    return errors
+
+
+def lancamentos_visiveis(conn, natureza: str, filtros: dict):
+    if filtros.get("pesquisar") != "1":
+        return []
+    return list_lancamentos(conn, natureza, filtros)
+
+
+def dialogo_inconsistencia(avisos: list[str], form_id: str) -> str:
+    app = ui()
+    itens = "".join(f"<li>{app.esc(item)}</li>" for item in avisos)
+    aberto = " open data-aberto=\"1\"" if avisos else ""
+    return (
+        f'<dialog class="modal" id="confirma-gravar"{aberto}>'
+        "<h2>Dados fora do usual</h2>"
+        "<p>A gravação tem estes pontos:</p>"
+        f"<ul>{itens}</ul>"
+        "<p>Deseja gravar mesmo assim?</p>"
+        '<div class="dialog-actions">'
+        '<form method="dialog"><button type="submit" class="btn-quiet" value="cancel">Cancelar</button></form>'
+        f'<button type="submit" form="{app.esc(form_id)}" name="confirmar_inconsistencia" value="1">Gravar</button>'
+        "</div></dialog>"
+    )
 
 
 def erros_da_busca(filtros: dict) -> dict[str, str]:
@@ -1342,7 +1470,7 @@ def salvar_lancamento(conn, editor: dict, arquivo: dict | None, gerar: bool) -> 
         int(editor["forma_pagamento_id"] or 0) or None,
         int(editor["condicao_pagamento_id"] or 0) or None,
         int(editor["qtde_parcelas"]),
-        parse_valor(editor["valor_total"]) or Decimal("0.00"),
+        parse_valor_assinado(editor["valor_total"]) or Decimal("0.00"),
         parse_data(editor["data_emissao"]),
         editor["observacao"],
         plano_id,
@@ -1388,7 +1516,12 @@ def salvar_lancamento(conn, editor: dict, arquivo: dict | None, gerar: bool) -> 
             INSERT INTO lancamento_parcela (lancamento_id, numero, valor, vencimento)
             VALUES (%s, %s, %s, %s)
             """,
-            (item_id, parcela["numero"], parse_valor(str(parcela["valor"])) or Decimal("0.00"), parse_data(parcela["vencimento"])),
+            (
+                item_id,
+                parcela["numero"],
+                parse_valor_assinado(str(parcela["valor"])) or Decimal("0.00"),
+                parse_data(parcela["vencimento"]),
+            ),
         )
     if gerar:
         conn.execute("DELETE FROM titulo WHERE lancamento_id = %s", (item_id,))
@@ -1402,7 +1535,7 @@ def salvar_lancamento(conn, editor: dict, arquivo: dict | None, gerar: bool) -> 
                 """,
                 (
                     item_id, editor["natureza"], int(editor["pessoa_id"]), editor["numero_documento"],
-                    parcela["numero"], parse_valor(str(parcela["valor"])), parse_data(parcela["vencimento"]),
+                    parcela["numero"], parse_valor_assinado(str(parcela["valor"])), parse_data(parcela["vencimento"]),
                     plano_id, centro_id,
                 ),
             )
@@ -1434,17 +1567,31 @@ def lancamento_page(conn, natureza: str, rows, filtros: dict, aviso: str, erro: 
     for value, label in (("manual", "Manual"), ("xml", "XML"), ("pdf", "PDF")):
         checked = " checked" if origem == value else ""
         radios.append(f'<label><input type="radio" name="origem" value="{value}"{checked}> {label}</label>')
-    total_parcelas = max(1, len(editor["parcelas"]))
+    mostrar_grade = bool(str(editor.get("id") or "")) or bool(editor.get("inconsistencias")) or bool(errors.get("parcelas"))
     parcelas_html = []
-    for parcela in editor["parcelas"]:
-        numero = parcela["numero"]
-        parcelas_html.append(
-            "<tr>"
-            f"<td>{numero}/{total_parcelas}</td>"
-            f'<td><input form="entrada" name="parcela_valor_{numero}" value="{app.esc(str(parcela["valor"]))}" inputmode="decimal"></td>'
-            f'<td><input form="entrada" name="parcela_vencimento_{numero}" value="{app.esc(str(parcela["vencimento"]))}" placeholder="dd/mm/aaaa"></td>'
-            "</tr>"
+    if mostrar_grade and editor.get("parcelas"):
+        total_parcelas = len(editor["parcelas"])
+        for parcela in editor["parcelas"]:
+            numero = parcela["numero"]
+            parcelas_html.append(
+                "<tr>"
+                f"<td>{numero}/{total_parcelas}</td>"
+                f'<td><input form="entrada" name="parcela_valor_{numero}" value="{app.esc(str(parcela["valor"]))}" inputmode="decimal"></td>'
+                f'<td><input form="entrada" name="parcela_vencimento_{numero}" value="{app.esc(str(parcela["vencimento"]))}" placeholder="dd/mm/aaaa"></td>'
+                "</tr>"
+            )
+    elif mostrar_grade:
+        parcelas_html.append("<tr><td colspan='3'>Esta conta não tem parcelas.</td></tr>")
+        parcela_hint = "Ajuste valor, emissão, condição e quantidade para montar as parcelas."
+    else:
+        parcela_hint = (
+            "Selecione uma conta a pagar para ver as parcelas."
+            if natureza == "pagar"
+            else "Selecione uma conta a receber para ver as parcelas."
         )
+        parcelas_html.append(f"<tr><td colspan='3'>{parcela_hint}</td></tr>")
+    if mostrar_grade and editor.get("parcelas"):
+        parcela_hint = "Acompanham valor, emissão, condição e quantidade. Dá para ajustar uma célula antes de gerar os títulos."
     if editor.get("arquivo_nome") and editor.get("id"):
         arquivo_link = (
             f'<a class="hint" href="{ARQUIVO_PATH}?id={app.esc(str(editor["id"]))}">'
@@ -1490,6 +1637,7 @@ def lancamento_page(conn, natureza: str, rows, filtros: dict, aviso: str, erro: 
   <input type="hidden" name="numero" value="{app.esc(filtros.get("numero", ""))}">
   <input type="hidden" name="valor" value="{app.esc(filtros.get("valor", ""))}">
   <input type="hidden" name="pessoa" value="{app.esc(filtros.get("pessoa", ""))}">
+  <input type="hidden" name="pesquisar" value="{app.esc(filtros.get("pesquisar", ""))}">
   <input type="hidden" name="arquivo_nome" value="{app.esc(editor.get("arquivo_nome", ""))}">
   <input type="hidden" name="pessoa_documento" value="{app.esc(editor.get("pessoa_documento", ""))}">
   <input type="hidden" name="pessoa_nome" value="{app.esc(editor.get("pessoa_nome", ""))}">
@@ -1526,7 +1674,7 @@ def lancamento_page(conn, natureza: str, rows, filtros: dict, aviso: str, erro: 
         body_rows.append(
             f'<tr class="is-pick{selected}" data-href="{app.esc(href)}" title="Ver as parcelas">'
             f"<td><strong>{app.esc(numero or '—')}</strong></td>"
-            f"<td>{app.esc(nome or 'Sem pessoa')}</td>"
+            f"<td title=\"{app.esc(nome or 'Sem pessoa')}\">{app.esc(nome or 'Sem pessoa')}</td>"
             f"<td class='num'>{app.esc(format_valor(valor))}</td>"
             f"<td class='num'>{qtde}</td>"
             f"<td><span class='pill{' off' if situacao != 'confirmado' else ''}'>{pill}</span></td>"
@@ -1544,18 +1692,27 @@ def lancamento_page(conn, natureza: str, rows, filtros: dict, aviso: str, erro: 
   <label>Número<input name="numero" value="{app.esc(filtros.get("numero", ""))}"></label>
   <label>Valor<input name="valor" inputmode="decimal" placeholder="0,00" value="{app.esc(filtros.get("valor", ""))}">{app.field_error(busca_erros, "valor")}</label>
   <label>Pessoa<input name="pessoa" value="{app.esc(filtros.get("pessoa", ""))}"></label>
-  <button type="submit">Pesquisar</button>
+  <div class="pay-actions">
+    <button type="submit" name="pesquisar" value="1">Pesquisar</button>
+    <a class="btn-quiet" href="{path}">Limpar</a>
+  </div>
 </form>
 """
+    vazio_lista = (
+        "Nenhuma entrada encontrada."
+        if filtros.get("pesquisar") == "1"
+        else "Nenhuma conta para mostrar. Pesquise para listar."
+    )
     table = (
         "<table class='grid'><thead><tr><th>Número</th><th>Pessoa</th><th class='num'>Valor</th><th class='num'>Parcelas</th><th>Situação</th><th>Ações</th></tr></thead><tbody>"
-        + ("".join(body_rows) or "<tr><td colspan='6'>Nenhuma entrada encontrada.</td></tr>")
+        + ("".join(body_rows) or f"<tr><td colspan='6'>{vazio_lista}</td></tr>")
         + "</tbody></table>"
     )
     parcelas = (
         "<table class='grid parcelas-grid'><thead><tr><th>Parcela</th><th>Valor</th><th>Vencimento</th></tr></thead>"
-        f"<tbody id='parcelas'>{''.join(parcelas_html)}</tbody></table>"
+        f"<tbody id='parcelas' data-viva=\"{'1' if mostrar_grade else '0'}\">{''.join(parcelas_html)}</tbody></table>"
     )
+    dialogo = dialogo_inconsistencia(list(editor.get("inconsistencias") or []), "entrada")
     body = f"""
 <div class="finance-desk">
 <header class="page-head">
@@ -1563,7 +1720,7 @@ def lancamento_page(conn, natureza: str, rows, filtros: dict, aviso: str, erro: 
   <h1>{app.esc(title)}</h1>
   <p class="lede">{app.esc(lede)}</p>
 </header>
-<section class="panel">
+<section class="panel finance-entry">
   <div class="panel-head"><h2>{app.esc(editor["titulo"])}</h2>
     <div class="form-actions">
       <button form="entrada" type="submit" name="acao" value="ler">Ler arquivo</button>
@@ -1579,11 +1736,12 @@ def lancamento_page(conn, natureza: str, rows, filtros: dict, aviso: str, erro: 
   <div class="grid-wrap">{table}</div>
 </section>
 <section class="panel finance-parcelas">
-  <div class="panel-head"><h2>Parcelas</h2><span class="hint">Acompanham valor, emissão, condição e quantidade. Dá para ajustar uma célula antes de gerar os títulos.</span></div>
+  <div class="panel-head"><h2>Parcelas</h2><span class="hint">{app.esc(parcela_hint)}</span></div>
   <div class="grid-wrap">{parcelas}</div>
   {app.field_error(errors, "parcelas")}
 </section>
 </div>
+{dialogo}
 <script>
 function dataBR(texto) {{
   const m = /^(\\d{{2}})\\/(\\d{{2}})\\/(\\d{{4}})$/.exec((texto || "").trim());
@@ -1599,15 +1757,20 @@ function formatData(data) {{
 function parseValor(texto) {{
   let t = (texto || "").trim().replace("R$", "").replace(/\\s/g, "");
   if (!t) return 0;
+  let negativo = false;
+  if (t.startsWith("-")) {{ negativo = true; t = t.slice(1); }}
   if (t.includes(",")) t = t.replace(/\\./g, "").replace(",", ".");
   else if (/^\\d{{1,3}}(\\.\\d{{3}})+$/.test(t)) t = t.replace(/\\./g, "");
   const n = Number(t);
-  return Number.isFinite(n) ? n : 0;
+  if (!Number.isFinite(n)) return 0;
+  return negativo ? -n : n;
 }}
 function formatValor(cents) {{
-  const inteiro = Math.floor(Math.abs(cents) / 100);
-  const frac = String(Math.abs(cents) % 100).padStart(2, "0");
-  return String(inteiro).replace(/\\B(?=(\\d{{3}})+(?!\\d))/g, ".") + "," + frac;
+  const sinal = cents < 0 ? "-" : "";
+  const abs = Math.abs(cents);
+  const inteiro = Math.floor(abs / 100);
+  const frac = String(abs % 100).padStart(2, "0");
+  return sinal + String(inteiro).replace(/\\B(?=(\\d{{3}})+(?!\\d))/g, ".") + "," + frac;
 }}
 function gerarParcelas() {{
   const qtde = Math.max(1, Math.min(48, Number(document.getElementById("qtde").value || 1)));
@@ -1623,22 +1786,25 @@ function gerarParcelas() {{
   alvo.innerHTML = "";
   for (let numero = 1; numero <= qtde; numero += 1) {{
     const extra = numero === qtde ? resto : 0;
-    const valor = cents > 0 ? formatValor(base + extra) : "";
+    const valor = cents !== 0 ? formatValor(base + extra) : "";
     const dia = dias[numero - 1] === undefined ? 30 * numero : dias[numero - 1];
     const vencimento = formatData(new Date(inicio.getFullYear(), inicio.getMonth(), inicio.getDate() + dia, 12));
     alvo.insertAdjacentHTML("beforeend",
       "<tr><td>" + numero + "/" + qtde + "</td><td><input form=\\"entrada\\" name=\\"parcela_valor_" + numero + "\\" value=\\"" + valor + "\\" inputmode=\\"decimal\\"></td><td><input form=\\"entrada\\" name=\\"parcela_vencimento_" + numero + "\\" value=\\"" + vencimento + "\\" placeholder=\\"dd/mm/aaaa\\"></td></tr>");
   }}
 }}
+const gradeViva = document.getElementById("parcelas").dataset.viva === "1";
 document.getElementById("condicao").addEventListener("change", (event) => {{
   const option = event.target.selectedOptions[0];
   if (option && option.dataset.qtde) document.getElementById("qtde").value = option.dataset.qtde;
-  gerarParcelas();
+  if (gradeViva) gerarParcelas();
 }});
-["qtde", "valor-total", "emissao"].forEach((id) => {{
-  document.getElementById(id).addEventListener("change", gerarParcelas);
-  document.getElementById(id).addEventListener("input", gerarParcelas);
-}});
+if (gradeViva) {{
+  ["qtde", "valor-total", "emissao"].forEach((id) => {{
+    document.getElementById(id).addEventListener("change", gerarParcelas);
+    document.getElementById(id).addEventListener("input", gerarParcelas);
+  }});
+}}
 const tipoDoc = document.getElementById("tipo-documento");
 const numeroDoc = document.getElementById("numero-documento");
 function atualizarNumero() {{
@@ -1663,6 +1829,53 @@ document.querySelectorAll("tr[data-href]").forEach((row) => {{
     if (event.target.closest("a, button, form, input")) return;
     window.location = row.dataset.href;
   }});
+}});
+const formEntrada = document.getElementById("entrada");
+const dialogoGravar = document.getElementById("confirma-gravar");
+function problemasDoFormulario() {{
+  const lista = [];
+  if (parseValor(document.getElementById("valor-total").value) < 0) lista.push("O valor total está negativo.");
+  let parcelaNegativa = false;
+  let vencido = false;
+  const hoje = new Date();
+  hoje.setHours(12, 0, 0, 0);
+  document.querySelectorAll("#parcelas input[name^=parcela_valor_]").forEach((input) => {{
+    if (parseValor(input.value) < 0) parcelaNegativa = true;
+  }});
+  document.querySelectorAll("#parcelas input[name^=parcela_vencimento_]").forEach((input) => {{
+    const data = dataBR(input.value);
+    if (data && data < hoje) vencido = true;
+  }});
+  if (parcelaNegativa) lista.push("Há parcela com valor negativo.");
+  if (vencido) lista.push("Há vencimento anterior à data de hoje.");
+  return lista;
+}}
+if (dialogoGravar && dialogoGravar.dataset.aberto === "1") {{
+  try {{
+    if (dialogoGravar.open) dialogoGravar.close();
+    dialogoGravar.showModal();
+  }} catch (erro) {{}}
+}}
+formEntrada.addEventListener("input", () => {{
+  const campo = formEntrada.querySelector("[name=confirmar_inconsistencia]");
+  if (campo) campo.value = "";
+}});
+function abrirConfirmacao(lista) {{
+  if (!dialogoGravar) return;
+  const ul = dialogoGravar.querySelector("ul");
+  if (ul) {{
+    ul.innerHTML = lista.map((item) => "<li>" + String(item).replace(/&/g, "&amp;").replace(/</g, "&lt;") + "</li>").join("");
+  }}
+  if (!dialogoGravar.open) dialogoGravar.showModal();
+}}
+formEntrada.addEventListener("submit", (event) => {{
+  const acao = event.submitter ? event.submitter.value : "";
+  if (acao !== "gerar") return;
+  if (!document.querySelector("#parcelas input[name^=parcela_valor_]")) return;
+  const lista = problemasDoFormulario();
+  if (!lista.length) return;
+  event.preventDefault();
+  abrirConfirmacao(lista);
 }});
 </script>
 """
@@ -1694,7 +1907,7 @@ def handle_lancamento_get(handler, natureza: str) -> None:
                 erro = "Registro não encontrado."
             else:
                 editor = loaded
-        rows = list_lancamentos(conn, natureza, filtros)
+        rows = lancamentos_visiveis(conn, natureza, filtros)
         payload = lancamento_page(conn, natureza, rows, filtros, aviso, erro, editor)
     handler.send_html(200, payload)
 
@@ -1738,12 +1951,21 @@ def handle_lancamento_post(handler, form: dict, natureza: str) -> None:
         with app.connect() as conn:
             aviso_xml = aplicar_arquivo(editor, arquivo["data"], arquivo["filename"], conn, natureza)
     erros_arquivo = editor["errors"]
-    gerar = form.get("acao") == "gerar"
+    confirmado = str(form.get("confirmar_inconsistencia") or "") == "1"
+    gerar = form.get("acao") == "gerar" or confirmado
     with app.connect() as conn:
         preparar_numero_automatico(conn, editor)
-    if gerar:
-        editor["errors"] = {**erros_arquivo, **validate_lancamento(editor)}
-    else:
+        if gerar and parcelas_sem_dados(editor["parcelas"]):
+            editor["parcelas"] = sugerir_parcelas(editor, nome_condicao(conn, editor))
+            if editor["parcelas"]:
+                editor["qtde_parcelas"] = str(len(editor["parcelas"]))
+        if gerar:
+            editor["errors"] = {**erros_arquivo, **validate_lancamento(editor), **conferir_referencias(conn, editor)}
+            if not editor["errors"]:
+                avisos = inconsistencias_lancamento(editor)
+                if avisos and not confirmado:
+                    editor["inconsistencias"] = avisos
+    if not gerar:
         editor["errors"] = dict(erros_arquivo)
         if (
             not editor["numero_documento"]
@@ -1752,11 +1974,11 @@ def handle_lancamento_post(handler, form: dict, natureza: str) -> None:
             and not erros_arquivo
         ):
             editor["errors"]["numero_documento"] = "Envie um XML ou PDF, ou informe o documento."
-    if editor["errors"] or (aviso_xml and gerar and not editor["pessoa_id"]):
+    if editor["errors"] or editor.get("inconsistencias") or (aviso_xml and gerar and not editor["pessoa_id"]):
         if aviso_xml and not editor["pessoa_id"]:
             editor["errors"]["pessoa_id"] = aviso_xml
         with app.connect() as conn:
-            rows = list_lancamentos(conn, natureza, filtros)
+            rows = lancamentos_visiveis(conn, natureza, filtros)
             payload = lancamento_page(conn, natureza, rows, filtros, "", aviso_xml, editor)
         handler.send_html(400, payload)
         return
@@ -1778,7 +2000,7 @@ def handle_lancamento_post(handler, form: dict, natureza: str) -> None:
             )
         }
         with app.connect() as conn:
-            rows = list_lancamentos(conn, natureza, filtros)
+            rows = lancamentos_visiveis(conn, natureza, filtros)
             payload = lancamento_page(conn, natureza, rows, filtros, "", "", editor)
         handler.send_html(400, payload)
         return
@@ -1801,7 +2023,7 @@ LEFT JOIN forma_pagamento fp ON fp.id = t.forma_pagamento_id
 
 
 def hoje_br() -> str:
-    return format_data(datetime.now(ZoneInfo("America/Sao_Paulo")).date())
+    return format_data(hoje_sp())
 
 
 def ids_marcados(form: dict) -> list[int]:
@@ -2253,6 +2475,302 @@ def handle_arquivo_get(handler) -> None:
     handler.wfile.write(body)
 
 
+def resumo_recibo(conn, item_id: int) -> dict | None:
+    row = conn.execute(
+        """
+        SELECT l.id, l.numero_documento, coalesce(p.nome, ''), l.valor_total, l.qtde_parcelas,
+               coalesce(td.nome, ''), coalesce(td.descricao, '')
+        FROM lancamento l
+        LEFT JOIN pessoa p ON p.id = l.pessoa_id
+        LEFT JOIN tipo_documento td ON td.id = l.tipo_documento_id
+        WHERE l.id = %s AND l.natureza = 'pagar'
+        """,
+        (item_id,),
+    ).fetchone()
+    if not row or not prefixo_numero_automatico(row[5], row[6]):
+        return None
+    return {
+        "id": row[0],
+        "numero": row[1] or str(row[0]),
+        "fornecedor": row[2] or "Sem fornecedor",
+        "valor": row[3],
+        "parcelas": row[4],
+    }
+
+
+def dialogo_recibo(resumo: dict | None) -> str:
+    if not resumo:
+        return ""
+    app = ui()
+    return (
+        '<dialog class="modal" id="recibo-ok" open data-aberto="1">'
+        "<h2>Gravado com sucesso</h2>"
+        f"<p>ID <strong>{app.esc(str(resumo['id']))}</strong></p>"
+        f"<p>Número <strong>{app.esc(str(resumo['numero']))}</strong></p>"
+        f"<p>Fornecedor <strong>{app.esc(str(resumo['fornecedor']))}</strong></p>"
+        f"<p>Valor <strong>{app.esc(format_valor(resumo['valor']))}</strong></p>"
+        f"<p>Parcelas <strong>{app.esc(str(resumo['parcelas']))}</strong></p>"
+        "<p>Os dados foram gravados com sucesso.</p>"
+        '<div class="dialog-actions"><button type="button" id="fechar-recibo">Fechar</button></div>'
+        "</dialog>"
+    )
+
+
+def recibos_page(conn, editor: dict, aviso: str, erro: str, resumo: dict | None) -> bytes:
+    app = ui()
+    tipos, pessoas, formas, condicoes = carregar_apoio(conn, "pagar")
+    tipos = [item for item in tipos if prefixo_numero_automatico(item[1], item[2])]
+    errors = editor.get("errors") or {}
+    planos = [
+        (item_id, f"{codigo} · {nome}", "")
+        for item_id, codigo, nome in conn.execute(
+            "SELECT id, codigo_reduzido, nome FROM plano_conta ORDER BY codigo_reduzido, id"
+        )
+    ]
+    centros = [
+        (item_id, f"{codigo} · {nome}", "")
+        for item_id, codigo, nome in conn.execute(
+            "SELECT id, codigo_reduzido, nome FROM centro_custo ORDER BY codigo_reduzido, id"
+        )
+    ]
+    opcoes_tipo = []
+    for item_id, nome, descricao in tipos:
+        rotulo = f"{nome} · {descricao}" if descricao else nome
+        opcoes_tipo.append((item_id, rotulo, ""))
+    parcelas_html = []
+    if editor.get("parcelas"):
+        total = len(editor["parcelas"])
+        for parcela in editor["parcelas"]:
+            numero = parcela["numero"]
+            parcelas_html.append(
+                "<tr>"
+                f"<td>{numero}/{total}</td>"
+                f'<td><input form="recibo" name="parcela_valor_{numero}" value="{app.esc(str(parcela["valor"]))}" inputmode="decimal"></td>'
+                f'<td><input form="recibo" name="parcela_vencimento_{numero}" value="{app.esc(str(parcela["vencimento"]))}" placeholder="dd/mm/aaaa"></td>'
+                "</tr>"
+            )
+    else:
+        parcelas_html.append(
+            "<tr><td colspan='3'>As parcelas aparecem ao informar valor, emissão e condição.</td></tr>"
+        )
+    aviso_tipos = "" if tipos else "Cadastre os tipos REC e PRO antes de incluir um recibo."
+    form = f"""
+<form id="recibo" class="record-form finance-form" method="post" action="{RECIBOS_PATH}">
+  <label>Tipo de documento<select name="tipo_documento_id" id="tipo-documento">{opcoes(opcoes_tipo, editor.get("tipo_documento_id", ""), "REC ou PRO")}</select>{app.field_error(errors, "tipo_documento_id")}</label>
+  <label class="span-2">Fornecedor<select name="pessoa_id">{opcoes(pessoas, editor.get("pessoa_id", ""), "Selecione")}</select>{app.field_error(errors, "pessoa_id")}</label>
+  <label>Número<input name="numero_documento" id="numero-documento" maxlength="40" placeholder="Se vazio, usa o ID" value="{app.esc(editor.get("numero_documento", ""))}">{app.field_error(errors, "numero_documento")}</label>
+  <label>Valor total<input name="valor_total" id="valor-total" inputmode="decimal" placeholder="0,00" value="{app.esc(format_valor(editor.get("valor_total", "")) or editor.get("valor_total", ""))}">{app.field_error(errors, "valor_total")}</label>
+  <label>Emissão<input name="data_emissao" id="emissao" placeholder="dd/mm/aaaa" value="{app.esc(editor.get("data_emissao", ""))}">{app.field_error(errors, "data_emissao")}</label>
+  <label>Forma<select name="forma_pagamento_id">{opcoes(formas, editor.get("forma_pagamento_id", ""), "Selecione")}</select>{app.field_error(errors, "forma_pagamento_id")}</label>
+  <label>Condição<select name="condicao_pagamento_id" id="condicao">{opcoes(condicoes, editor.get("condicao_pagamento_id", ""), "Selecione")}</select>{app.field_error(errors, "condicao_pagamento_id")}</label>
+  <label>Parcelas<input name="qtde_parcelas" id="qtde" inputmode="numeric" value="{app.esc(str(editor.get("qtde_parcelas", "1")))}">{app.field_error(errors, "qtde_parcelas")}</label>
+  <label class="plano-campo">Plano de contas<select name="plano_conta_id">{opcoes(planos, editor.get("plano_conta_id", ""), "Selecione")}</select>{app.field_error(errors, "plano_conta_id")}</label>
+  <label class="centro-campo">Centro de custo<select name="centro_custo_id">{opcoes(centros, editor.get("centro_custo_id", ""), "Selecione")}</select>{app.field_error(errors, "centro_custo_id")}</label>
+  <label class="span-2">Observação<input name="observacao" maxlength="180" value="{app.esc(editor.get("observacao", ""))}"></label>
+</form>
+"""
+    parcelas = (
+        "<table class='grid parcelas-grid'><thead><tr><th>Parcela</th><th>Valor</th><th>Vencimento</th></tr></thead>"
+        f"<tbody id='parcelas' data-viva='1'>{''.join(parcelas_html)}</tbody></table>"
+    )
+    dialogo = dialogo_inconsistencia(list(editor.get("inconsistencias") or []), "recibo")
+    sucesso = dialogo_recibo(resumo)
+    script = r"""
+<script>
+function dataBR(texto) {
+  const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec((texto || "").trim());
+  if (!m) return null;
+  const dia = Number(m[1]), mes = Number(m[2]), ano = Number(m[3]);
+  const data = new Date(ano, mes - 1, dia, 12);
+  if (data.getFullYear() !== ano || data.getMonth() !== mes - 1 || data.getDate() !== dia) return null;
+  return data;
+}
+function formatData(data) {
+  return String(data.getDate()).padStart(2, "0") + "/" + String(data.getMonth() + 1).padStart(2, "0") + "/" + data.getFullYear();
+}
+function parseValor(texto) {
+  let t = (texto || "").trim().replace("R$", "").replace(/\s/g, "");
+  if (!t) return 0;
+  let negativo = false;
+  if (t.startsWith("-")) { negativo = true; t = t.slice(1); }
+  if (t.includes(",")) t = t.replace(/\./g, "").replace(",", ".");
+  else if (/^\d{1,3}(\.\d{3})+$/.test(t)) t = t.replace(/\./g, "");
+  const n = Number(t);
+  if (!Number.isFinite(n)) return 0;
+  return negativo ? -n : n;
+}
+function formatValor(cents) {
+  const sinal = cents < 0 ? "-" : "";
+  const abs = Math.abs(cents);
+  const inteiro = Math.floor(abs / 100);
+  const frac = String(abs % 100).padStart(2, "0");
+  return sinal + String(inteiro).replace(/\B(?=(\d{3})+(?!\d))/g, ".") + "," + frac;
+}
+function gerarParcelas() {
+  const qtde = Math.max(1, Math.min(48, Number(document.getElementById("qtde").value || 1)));
+  document.getElementById("qtde").value = String(qtde);
+  const cents = Math.round(parseValor(document.getElementById("valor-total").value) * 100);
+  const base = Math.floor(cents / qtde);
+  const resto = cents - base * qtde;
+  const option = document.getElementById("condicao").selectedOptions[0];
+  let dias = (option && option.dataset.dias ? option.dataset.dias.split(",") : []).map(Number).filter((n) => !Number.isNaN(n));
+  if (!dias.length) dias = qtde === 1 ? [0] : Array.from({length: qtde}, (_, i) => 30 * (i + 1));
+  const inicio = dataBR(document.getElementById("emissao").value) || new Date();
+  const alvo = document.getElementById("parcelas");
+  alvo.innerHTML = "";
+  for (let numero = 1; numero <= qtde; numero += 1) {
+    const extra = numero === qtde ? resto : 0;
+    const valor = cents !== 0 ? formatValor(base + extra) : "";
+    const dia = dias[numero - 1] === undefined ? 30 * numero : dias[numero - 1];
+    const vencimento = formatData(new Date(inicio.getFullYear(), inicio.getMonth(), inicio.getDate() + dia, 12));
+    alvo.insertAdjacentHTML("beforeend",
+      "<tr><td>" + numero + "/" + qtde + "</td><td><input form=\"recibo\" name=\"parcela_valor_" + numero + "\" value=\"" + valor + "\" inputmode=\"decimal\"></td><td><input form=\"recibo\" name=\"parcela_vencimento_" + numero + "\" value=\"" + vencimento + "\" placeholder=\"dd/mm/aaaa\"></td></tr>");
+  }
+}
+document.getElementById("condicao").addEventListener("change", (event) => {
+  const option = event.target.selectedOptions[0];
+  if (option && option.dataset.qtde) document.getElementById("qtde").value = option.dataset.qtde;
+  gerarParcelas();
+});
+["qtde", "valor-total", "emissao"].forEach((id) => {
+  document.getElementById(id).addEventListener("change", gerarParcelas);
+  document.getElementById(id).addEventListener("input", gerarParcelas);
+});
+const formRecibo = document.getElementById("recibo");
+const dialogoGravar = document.getElementById("confirma-gravar");
+function problemasDoFormulario() {
+  const lista = [];
+  if (parseValor(document.getElementById("valor-total").value) < 0) lista.push("O valor total está negativo.");
+  let parcelaNegativa = false;
+  let vencido = false;
+  const hoje = new Date();
+  hoje.setHours(12, 0, 0, 0);
+  document.querySelectorAll("#parcelas input[name^=parcela_valor_]").forEach((input) => {
+    if (parseValor(input.value) < 0) parcelaNegativa = true;
+  });
+  document.querySelectorAll("#parcelas input[name^=parcela_vencimento_]").forEach((input) => {
+    const data = dataBR(input.value);
+    if (data && data < hoje) vencido = true;
+  });
+  if (parcelaNegativa) lista.push("Há parcela com valor negativo.");
+  if (vencido) lista.push("Há vencimento anterior à data de hoje.");
+  return lista;
+}
+function abrirConfirmacao(lista) {
+  if (!dialogoGravar) return;
+  const ul = dialogoGravar.querySelector("ul");
+  if (ul) ul.innerHTML = lista.map((item) => "<li>" + String(item).replace(/&/g, "&amp;").replace(/</g, "&lt;") + "</li>").join("");
+  if (!dialogoGravar.open) dialogoGravar.showModal();
+}
+if (dialogoGravar && dialogoGravar.dataset.aberto === "1") {
+  try { if (dialogoGravar.open) dialogoGravar.close(); dialogoGravar.showModal(); } catch (erro) {}
+}
+const reciboOk = document.getElementById("recibo-ok");
+if (reciboOk && reciboOk.dataset.aberto === "1") {
+  try { if (reciboOk.open) reciboOk.close(); reciboOk.showModal(); } catch (erro) {}
+}
+document.getElementById("fechar-recibo")?.addEventListener("click", () => {
+  if (reciboOk) reciboOk.close();
+  if (location.search.indexOf("gravado=") >= 0) history.replaceState({}, "", location.pathname);
+});
+formRecibo.addEventListener("submit", (event) => {
+  const acao = event.submitter ? event.submitter.name : "";
+  if (acao === "confirmar_inconsistencia") return;
+  if (!document.querySelector("#parcelas input[name^=parcela_valor_]")) return;
+  const lista = problemasDoFormulario();
+  if (!lista.length) return;
+  event.preventDefault();
+  abrirConfirmacao(lista);
+});
+</script>
+"""
+    body = f"""
+<div class="finance-desk recibo-desk">
+<header class="page-head">
+  <p class="eyebrow">FINANCEIRO</p>
+  <h1>Recibos</h1>
+  <p class="lede">Inclui recibo ou promissória e gera a entrada em contas a pagar. O ID é automático. Sem número, o documento fica com o mesmo número do ID.</p>
+</header>
+<section class="panel finance-entry">
+  <div class="panel-head"><h2>Novo recibo</h2>
+    <div class="form-actions"><button form="recibo" type="submit" name="acao" value="gravar">Gravar</button></div>
+  </div>
+  {app.flashes_html(aviso, erro or aviso_tipos)}
+  {form}
+</section>
+<section class="panel finance-parcelas">
+  <div class="panel-head"><h2>Parcelas</h2><span class="hint">Dá para ajustar uma célula antes de gravar.</span></div>
+  <div class="grid-wrap">{parcelas}</div>
+  {app.field_error(errors, "parcelas")}
+</section>
+</div>
+{dialogo}
+{sucesso}
+{script}
+"""
+    return app.page("Recibos", body, logged=True, current=RECIBOS_PATH)
+
+
+def handle_recibos_get(handler) -> None:
+    app = ui()
+    params = handler.query()
+    editor = blank_lancamento("pagar")
+    editor["somente_recibo"] = True
+    editor["numero_opcional"] = True
+    resumo = None
+    with app.connect() as conn:
+        item_id = app.parse_record_id(params.get("gravado", ""))
+        if item_id:
+            resumo = resumo_recibo(conn, item_id)
+        payload = recibos_page(conn, editor, "", "", resumo)
+    handler.send_html(200, payload)
+
+
+def handle_recibos_post(handler, form: dict) -> None:
+    app = ui()
+    confirmado = str(form.get("confirmar_inconsistencia") or "") == "1"
+    editor = lancamento_from_form(form, "pagar")
+    editor["origem"] = "manual"
+    editor["numero_opcional"] = True
+    editor["somente_recibo"] = True
+    editor["numero_automatico"] = False
+    with app.connect() as conn:
+        if parcelas_sem_dados(editor["parcelas"]):
+            editor["parcelas"] = sugerir_parcelas(editor, nome_condicao(conn, editor))
+            if editor["parcelas"]:
+                editor["qtde_parcelas"] = str(len(editor["parcelas"]))
+        editor["errors"] = {**validate_lancamento(editor), **conferir_referencias(conn, editor)}
+        if not editor["errors"]:
+            avisos = inconsistencias_lancamento(editor)
+            if avisos and not confirmado:
+                editor["inconsistencias"] = avisos
+        if editor["errors"] or editor.get("inconsistencias"):
+            payload = recibos_page(conn, editor, "", "", None)
+            handler.send_html(400, payload)
+            return
+        try:
+            item_id = salvar_lancamento(conn, editor, None, True)
+            if not (editor.get("numero_documento") or "").strip():
+                numero = numero_efetivo("", item_id)
+                conn.execute(
+                    "UPDATE lancamento SET numero_documento = %s WHERE id = %s",
+                    (numero, item_id),
+                )
+                conn.execute(
+                    "UPDATE titulo SET numero_documento = %s WHERE lancamento_id = %s",
+                    (numero, item_id),
+                )
+            conn.commit()
+        except (psycopg.Error, ValueError):
+            editor["errors"] = {
+                "tipo_documento_id": "Não foi possível gravar. Confira tipo, fornecedor, forma, condição, plano de contas e centro de custo."
+            }
+            payload = recibos_page(conn, editor, "", "", None)
+            handler.send_html(400, payload)
+            return
+    handler.redirect(RECIBOS_PATH + "?" + urlencode({"gravado": str(item_id)}))
+
+
 def handle_financeiro_get(handler, path: str) -> None:
     if path == CONSULTA_PATH:
         handler.send_json(200, consultar_documento(handler.query().get("documento", "")))
@@ -2272,6 +2790,9 @@ def handle_financeiro_get(handler, path: str) -> None:
     if path == RECEBER_PATH:
         handle_lancamento_get(handler, "receber")
         return
+    if path == RECIBOS_PATH:
+        handle_recibos_get(handler)
+        return
     if path == TITULOS_PATH:
         handle_titulos_get(handler)
         return
@@ -2290,6 +2811,9 @@ def handle_financeiro_post(handler, path: str, form: dict) -> None:
         return
     if path == RECEBER_PATH:
         handle_lancamento_post(handler, form, "receber")
+        return
+    if path == RECIBOS_PATH:
+        handle_recibos_post(handler, form)
         return
     if path == TITULOS_PATH:
         handle_titulos_post(handler, form)

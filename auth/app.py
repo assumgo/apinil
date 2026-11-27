@@ -66,6 +66,7 @@ CADASTROS = (
 MODULES = (
     ("/restrito/contas-a-pagar", "Contas a pagar", "Compromissos e pagamentos da indústria."),
     ("/restrito/contas-a-receber", "Contas a receber", "Vendas e recebimentos."),
+    ("/restrito/recibos", "Recibos", "Recibos e promissórias que geram contas a pagar."),
     ("/restrito/titulos", "Titulos", "Títulos da fábrica, a pagar e a receber."),
 )
 
@@ -475,6 +476,7 @@ ICONS = {
     "up": '<path d="M7 14h10l-5-6z"/>',
     "pay": '<circle cx="12" cy="12" r="8"/><path d="M12 8v8"/><path d="m8.5 13.5 3.5 3.5 3.5-3.5"/>',
     "receive": '<circle cx="12" cy="12" r="8"/><path d="M12 16V8"/><path d="m8.5 10.5 3.5-3.5 3.5 3.5"/>',
+    "receipt": '<path d="M7 3.5h10v17l-2.5-1.4L12 20.5 9.5 19.1 7 20.5z"/><path d="M10 8h4M10 12h4"/>',
     "ledger": '<path d="M6 3.5h12v17H6z"/><path d="M6 8h12"/><path d="M9 12h6"/><path d="M9 16h4"/>',
     "moon": '<path d="M16 3.5A8 8 0 1 0 20.5 14 6.2 6.2 0 0 1 16 3.5z"/>',
     "search": '<circle cx="11" cy="11" r="6"/><path d="m16 16 4 4"/>',
@@ -504,6 +506,7 @@ NAV_ICONS = {
     "/restrito/cadastros/usuarios": "user",
     "/restrito/contas-a-pagar": "pay",
     "/restrito/contas-a-receber": "receive",
+    "/restrito/recibos": "receipt",
     "/restrito/titulos": "file",
     "/restrito/relatorios/titulos-em-aberto": "chart",
     "/restrito/relatorios/titulos-baixados": "chart",
@@ -804,9 +807,9 @@ html[data-theme="dark"] .error { color: #ffb4b4; }
 .app-content:has(.finance-desk) { padding-bottom: 16px; }
 .finance-desk {
   display: grid;
-  grid-template-rows: auto auto minmax(180px, 1fr) auto;
-  gap: 10px;
-  min-height: calc(100vh - 124px);
+  grid-template-rows: auto auto auto auto;
+  gap: 8px;
+  min-height: 0;
 }
 .finance-desk .page-head { margin: 0; }
 .finance-desk .page-head h1 { font-size: 22px; }
@@ -824,22 +827,56 @@ html[data-theme="dark"] .error { color: #ffb4b4; }
 .finance-desk .panel-head span { white-space: normal; }
 .finance-desk .panel-head .hint { font-weight: 500; }
 .finance-desk .grid-wrap { overflow: auto; min-height: 0; }
-.finance-list .grid-wrap { max-height: min(320px, 34vh); }
-.finance-parcelas .grid-wrap { max-height: min(220px, 26vh); }
+.finance-entry.panel { padding: 8px 10px; }
+.finance-entry .panel-head { margin-bottom: 4px; }
+.finance-list .grid-wrap {
+  height: 280px;
+  min-height: 280px;
+  max-height: 280px;
+}
+.finance-list table.grid { table-layout: fixed; }
+.finance-list table.grid th,
+.finance-list table.grid td {
+  box-sizing: border-box;
+  height: 36px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+}
+.finance-list table.grid th { height: 32px; }
+.finance-list table.grid th:nth-child(1),
+.finance-list table.grid td:nth-child(1) { width: 12%; }
+.finance-list table.grid th:nth-child(2),
+.finance-list table.grid td:nth-child(2) { width: 36%; }
+.finance-list table.grid th:nth-child(3),
+.finance-list table.grid td:nth-child(3) { width: 14%; }
+.finance-list table.grid th:nth-child(4),
+.finance-list table.grid td:nth-child(4) { width: 10%; }
+.finance-list table.grid th:nth-child(5),
+.finance-list table.grid td:nth-child(5) { width: 12%; }
+.finance-list table.grid th:nth-child(6),
+.finance-list table.grid td:nth-child(6) { width: 16%; }
+.finance-list .row-actions { flex-wrap: nowrap; }
+.finance-parcelas .grid-wrap { max-height: 140px; min-height: 72px; }
+.recibo-desk .finance-parcelas .grid-wrap { max-height: 220px; min-height: 88px; }
 .finance-desk table.grid td, .finance-desk table.grid th { padding: 6px 8px; }
 .finance-desk form.finance-form {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 8px 10px;
+  gap: 4px 8px;
   align-items: end;
 }
+.finance-desk form.finance-form > label { gap: 2px; }
 .finance-form input[type="hidden"] { display: none; }
 .finance-desk form.finance-form > label,
 .finance-desk form.finance-form > .campo { min-width: 0; max-width: 100%; }
 .finance-desk .span-2 { grid-column: span 2; }
-.finance-desk .plano-campo { grid-column: 1 / span 3; }
-.finance-desk .centro-campo { grid-column: 4 / span 3; }
-.finance-desk input, .finance-desk select { padding: 7px 10px; }
+.finance-desk .plano-campo { grid-column: span 3; }
+.finance-desk .centro-campo { grid-column: span 3; }
+.finance-desk input, .finance-desk select { padding: 4px 8px; }
+.finance-desk form.finance-form input:not([type="radio"]):not([type="checkbox"]):not([type="file"]):not([type="hidden"]),
+.finance-desk form.finance-form select { height: 32px; }
 .finance-desk form.finance-form input:not([type="radio"]):not([type="checkbox"]):not([type="file"]):not([type="hidden"]),
 .finance-desk form.finance-form select {
   width: 100%;
@@ -877,12 +914,26 @@ html[data-theme="dark"] .file-btn { background: var(--field); color: var(--ink);
 .finance-parcelas input { width: 100%; }
 .finance-desk form.pay-filters {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr)) auto;
   gap: 8px;
   align-items: end;
   margin: 0 0 8px;
 }
-.finance-desk form.pay-filters button { width: auto; justify-self: start; }
+@media (max-width: 1180px) {
+  .finance-desk form.pay-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .finance-desk form.pay-filters .pay-actions { grid-column: 1 / -1; justify-content: flex-start; }
+}
+.finance-desk form.pay-filters .pay-actions { display: flex; flex-wrap: nowrap; gap: 8px; align-items: end; }
+.finance-desk form.pay-filters .pay-actions button,
+.finance-desk form.pay-filters .pay-actions a { width: auto; min-width: 108px; flex: 0 0 auto; }
+a.btn-quiet, button.btn-quiet {
+  box-sizing: border-box; height: 40px; padding: 0 16px; border-radius: 10px;
+  background: var(--white); color: var(--ink); border: 1px solid var(--line);
+  font: inherit; font-weight: 700; text-decoration: none; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+html[data-theme="dark"] a.btn-quiet,
+html[data-theme="dark"] button.btn-quiet { background: var(--field); color: var(--ink); border-color: #5d7a6a; }
 .finance-list tr.is-pick { cursor: pointer; }
 .finance-list tr.is-pick:hover td { background: #f3faf6; }
 html[data-theme="dark"] .finance-list tr.is-pick:hover td { background: #203128; }
@@ -979,9 +1030,21 @@ html[data-theme="dark"] .pill.off { background: #4a2424; color: #ffd0d0; }
 }
 .module-card h2 { margin: 0 0 6px; font-size: 20px; }
 .module-card p { margin: 0; color: var(--muted); }
-dialog.modal { border: 0; border-radius: 16px; padding: 24px; max-width: 420px; box-shadow: var(--shadow); }
+dialog.modal {
+  border: 0; border-radius: 16px; padding: 24px; max-width: min(480px, calc(100vw - 32px));
+  box-shadow: var(--shadow); background: var(--white); color: var(--ink);
+}
+dialog.modal[open] {
+  position: fixed; inset: auto; top: 50%; left: 50%; margin: 0;
+  transform: translate(-50%, -50%); z-index: 30;
+}
 dialog.modal::backdrop { background: rgba(16, 32, 24, .45); }
 dialog.modal h2 { margin: 0 0 8px; }
+dialog.modal p { margin: 0 0 8px; line-height: 1.45; }
+dialog.modal ul { margin: 0 0 12px; padding-left: 18px; }
+dialog.modal .dialog-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+dialog.modal .dialog-actions form { display: flex; margin: 0; }
+dialog.modal .dialog-actions button { width: auto; min-width: 120px; }
 .home-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; margin: 4px 0 12px; }
 .home-head h1 { margin: 0; font-size: 32px; }
 .home-user { text-align: right; min-width: 0; }
@@ -2272,7 +2335,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path in (
             "/restrito/cadastros/pessoas", "/restrito/cadastros/pessoas/consulta", "/restrito/cep",
-            "/restrito/contas-a-pagar", "/restrito/contas-a-receber", "/restrito/titulos",
+            "/restrito/contas-a-pagar", "/restrito/contas-a-receber", "/restrito/recibos", "/restrito/titulos",
             "/restrito/lancamentos/arquivo", "/restrito/relatorios/titulos-em-aberto",
             "/restrito/relatorios/titulos-baixados",
         ):
@@ -2389,7 +2452,7 @@ class Handler(BaseHTTPRequestHandler):
             from painel import handle_backups_post
             handle_backups_post(self, user, form)
             return
-        if path in ("/restrito/cadastros/pessoas", "/restrito/contas-a-pagar", "/restrito/contas-a-receber", "/restrito/titulos"):
+        if path in ("/restrito/cadastros/pessoas", "/restrito/contas-a-pagar", "/restrito/contas-a-receber", "/restrito/recibos", "/restrito/titulos"):
             if not user:
                 self.redirect("/restrito/login")
                 return
