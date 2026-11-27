@@ -29,6 +29,7 @@ fi
 cd "$APP_DIR"
 git fetch --tags origin
 git checkout "$REF"
+mkdir -p "$APP_DIR/backups"
 PORT="$PORT" docker compose up -d --build
 docker compose ps
 echo "Apinil ${REF} publicado em ${APP_DIR}, porta ${PORT}."

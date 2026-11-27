@@ -11,10 +11,16 @@ services:
       timeout: 3s
       retries: 3
   auth:
-    build: ./auth
+    build:
+      context: .
+      dockerfile: auth/Dockerfile
     image: apinil-auth:local
     network_mode: host
     env_file:
       - path: .env
         required: false
+    environment:
+      BACKUP_DIR: /var/lib/apinil/backups
+    volumes:
+      - /opt/apinil/backups:/var/lib/apinil/backups
     restart: unless-stopped

@@ -72,6 +72,7 @@ MODULES = (
 RELATORIOS = (
     ("/restrito/relatorios/titulos-em-aberto", "Títulos em aberto", "O que ainda falta pagar ou receber."),
     ("/restrito/relatorios/titulos-baixados", "Títulos baixados", "O que já foi pago ou recebido, com data, forma e conta."),
+    ("/restrito/relatorios/historico", "Histórico", "Inclusões, alterações, visualizações e exclusões."),
 )
 
 TIPOS_PATH = "/restrito/cadastros/tipos-de-documentos"
@@ -479,6 +480,8 @@ ICONS = {
     "search": '<circle cx="11" cy="11" r="6"/><path d="m16 16 4 4"/>',
     "chart": '<path d="M4 19h16"/><path d="M7 16V9"/><path d="M12 16V5"/><path d="M17 16v-6"/>',
     "menu": '<path d="M4 7h16M4 12h16M4 17h16"/>',
+    "clock": '<circle cx="12" cy="12" r="8"/><path d="M12 8v5l3 2"/>',
+    "archive": '<path d="M4 7h16v4H4z"/><path d="M6 11v8h12v-8"/><path d="M10 15h4"/>',
 }
 
 
@@ -504,6 +507,8 @@ NAV_ICONS = {
     "/restrito/titulos": "file",
     "/restrito/relatorios/titulos-em-aberto": "chart",
     "/restrito/relatorios/titulos-baixados": "chart",
+    "/restrito/relatorios/historico": "clock",
+    "/restrito/backups": "archive",
 }
 
 
@@ -541,6 +546,7 @@ def side_nav(current: str) -> str:
     links.append(nav_group(
         "Relatórios", "menu-relatorios", RELATORIOS, current, current.startswith("/restrito/relatorios"),
     ))
+    links.append(nav_link("/restrito/backups", "Backups", current))
     account = ""
     if user:
         identity = user.get("email") or user.get("username") or ""
@@ -976,6 +982,57 @@ html[data-theme="dark"] .pill.off { background: #4a2424; color: #ffd0d0; }
 dialog.modal { border: 0; border-radius: 16px; padding: 24px; max-width: 420px; box-shadow: var(--shadow); }
 dialog.modal::backdrop { background: rgba(16, 32, 24, .45); }
 dialog.modal h2 { margin: 0 0 8px; }
+.home-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; margin: 4px 0 12px; }
+.home-head h1 { margin: 0; font-size: 32px; }
+.home-user { text-align: right; min-width: 0; }
+.home-user strong { display: block; font-size: 16px; }
+.home-user span { color: var(--muted); font-size: 13px; }
+.home-metrics, .home-split { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 14px; }
+.metric, .home-card {
+  background: var(--white); border-radius: 16px; box-shadow: var(--shadow);
+  padding: 16px 18px; min-width: 0; border-top: 3px solid var(--green);
+}
+.metric-label, .home-card .panel-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.metric-label { color: var(--muted); font-size: 13px; font-weight: 700; }
+.metric-label em { font-style: normal; font-weight: 600; }
+.metric-body { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; margin-top: 10px; flex-wrap: wrap; }
+.metric-main { min-width: 0; flex: 1 1 160px; }
+.metric-main strong { display: block; font-size: 30px; line-height: 1.1; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.metric-main span, .metric-side, .vencidos-cols span { color: var(--muted); font-size: 13px; }
+.metric.receber .metric-main strong { color: var(--green); }
+.metric-side { margin-left: auto; text-align: right; display: grid; gap: 8px; }
+.metric-side b { display: block; color: var(--ink); font-size: 15px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.vencidos-cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 10px; }
+.vencidos-cols strong { display: block; font-size: 26px; line-height: 1.1; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.vencidos-cols > div:last-child { text-align: right; }
+.valor-vencido, .saldo-negativo { color: #8d2b2b; }
+.saldo-positivo { color: var(--green); }
+html[data-theme="dark"] .valor-vencido, html[data-theme="dark"] .saldo-negativo { color: #ffb4b4; }
+.home-card h2 { margin: 0; font-size: 16px; }
+.home-card .panel-head { margin: 0 0 8px; }
+.home-card a.more { color: var(--green); font-weight: 700; text-decoration: none; white-space: nowrap; }
+.home-card table.grid td, .home-card table.grid th { padding: 8px 6px; font-size: 13px; }
+.home-empty { color: var(--muted); text-align: center; padding: 28px 8px; margin: 0; }
+.backup-latest { background: #e7f6ee; border-radius: 12px; padding: 12px 14px; margin: 4px 0 8px; display: grid; gap: 2px; }
+html[data-theme="dark"] .backup-latest { background: #1c3a2c; }
+.backup-latest span, .backup-row span { color: var(--muted); font-size: 13px; }
+.backup-row, .hist-row { display: grid; grid-template-columns: 132px minmax(0, 1fr); gap: 8px; align-items: baseline; padding: 7px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+.hist-row p { margin: 0; overflow-wrap: anywhere; }
+.app-body form.backup-now { display: flex; justify-content: flex-end; margin-top: 12px; }
+.app-body form.backup-now button { width: auto; }
+.backup-item { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); gap: 12px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.backup-item strong, .backup-item span { display: block; }
+.backup-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; align-items: end; min-width: 0; }
+.backup-actions .primary { width: auto; display: inline-flex; align-items: center; height: 40px; box-sizing: border-box; }
+.app-body form.inline-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; justify-content: flex-end; }
+.app-body form.inline-form label { min-width: 140px; }
+.app-body form.inline-form button { width: auto; height: 40px; }
+.history-filters {
+  display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)) auto; gap: 8px 12px; align-items: start; margin: 0 0 12px;
+}
+.history-filters > label { min-width: 0; }
+.history-filters input, .history-filters select { width: 100%; min-width: 0; box-sizing: border-box; height: 40px; padding: 8px 10px; }
+.history-filters .report-action { padding-top: 24px; }
 @media (max-width: 1280px) {
   .title-filters { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
@@ -984,7 +1041,10 @@ dialog.modal h2 { margin: 0 0 8px; }
   .app-side { transform: translateX(-105%); transition: transform .2s ease; z-index: 20; }
   .app-side.is-open { transform: none; }
   .app-main { margin-left: 0; }
-  .split, .split.wide-form, .baixa-fields, .report-filters, .title-filters { grid-template-columns: 1fr 1fr; }
+  .split, .split.wide-form, .baixa-fields, .report-filters, .title-filters, .history-filters { grid-template-columns: 1fr 1fr; }
+  .home-metrics, .home-split, .vencidos-cols, .backup-item { grid-template-columns: 1fr; }
+  .vencidos-cols > div:last-child, .backup-actions, .app-body form.inline-form { text-align: left; justify-content: flex-start; }
+  .metric-main strong { font-size: 26px; }
   .title-action { grid-column: 1 / -1; padding-top: 0; }
   .baixa-action { padding-top: 24px; }
   .parcela { grid-template-columns: 1fr; }
@@ -1095,27 +1155,9 @@ def current_user(handler: BaseHTTPRequestHandler):
     }
 
 
-def cards_for(items) -> str:
-    cards = []
-    for href, label, text in items:
-        cards.append(
-            f'<a class="module-card" href="{esc(href)}"><h2>{esc(label)}</h2><p>{esc(text)}</p></a>'
-        )
-    return f'<div class="module-grid">{"".join(cards)}</div>'
-
-
-def cadastros_page() -> bytes:
-    body = f"""
-<header class="page-head">
-  <p class="eyebrow">CADASTROS</p>
-  <h1>Início</h1>
-  <p class="lede">Escolha o cadastro que deseja consultar. Os registros já gravados continuam disponíveis.</p>
-</header>
-{cards_for(CADASTROS + MODULES)}
-<p class="eyebrow section-gap">RELATÓRIOS</p>
-{cards_for(RELATORIOS)}
-"""
-    return page("Início", body, logged=True, current="/restrito/cadastros")
+def cadastros_page(user=None, params=None) -> bytes:
+    from painel import inicio_page
+    return inicio_page(user or {}, params or {})
 
 
 def tipos_url(**params: str) -> str:
@@ -2050,7 +2092,23 @@ class Handler(BaseHTTPRequestHandler):
         for key, value in security_headers(request_host(self)):
             self.send_header(key, value)
 
+    def _registrar_auditoria(self, status: int, location: str) -> None:
+        if getattr(self, "_audit_done", False):
+            return
+        pedido = getattr(self, "_pedido", None)
+        usuario = getattr(self, "_audit_usuario", None) or VIEWER.get()
+        if not pedido or not usuario:
+            return
+        try:
+            from painel import registrar_requisicao
+            gravou = registrar_requisicao(usuario, pedido, status, location, client_ip(self))
+        except Exception:
+            return
+        if gravou:
+            self._audit_done = True
+
     def send_html(self, status: int, payload: bytes, *, headers: list[tuple[str, str]] | None = None) -> None:
+        self._registrar_auditoria(status, "")
         self.send_response(status)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
@@ -2063,6 +2121,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def send_json(self, status: int, payload: dict) -> None:
         import json
+        self._registrar_auditoria(status, "")
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -2073,6 +2132,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def redirect(self, location: str, *, cookie: str | None = None) -> None:
+        self._registrar_auditoria(303, location)
         self.send_response(303)
         self.send_header("Location", location)
         self.send_header("Cache-Control", "no-store")
@@ -2082,7 +2142,16 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self) -> None:
+        self._audit_done = False
         path = urlparse(self.path).path.rstrip("/") or "/"
+        params = self.query()
+        self._pedido = {
+            "metodo": "GET",
+            "path": path,
+            "acao": "",
+            "registro": (params.get("id") or "")[:40],
+            "consulta": (params.get("acao") or "")[:20],
+        }
         if path == "/restrito/app.css":
             body = APP_CSS.encode("utf-8")
             self.send_response(200)
@@ -2133,7 +2202,28 @@ class Handler(BaseHTTPRequestHandler):
             if not user:
                 self.redirect("/restrito/login")
                 return
-            self.send_html(200, cadastros_page())
+            self.send_html(200, cadastros_page(user, params))
+            return
+        if path == "/restrito/backups":
+            if not user:
+                self.redirect("/restrito/login")
+                return
+            from painel import handle_backups_get
+            handle_backups_get(self, user)
+            return
+        if path == "/restrito/backups/arquivo":
+            if not user:
+                self.redirect("/restrito/login")
+                return
+            from painel import handle_backup_arquivo
+            handle_backup_arquivo(self, user)
+            return
+        if path == "/restrito/relatorios/historico":
+            if not user:
+                self.redirect("/restrito/login")
+                return
+            from painel import handle_historico_get
+            handle_historico_get(self)
             return
         if path == TIPOS_PATH:
             if not user:
@@ -2214,9 +2304,15 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_POST(self) -> None:
-        path = urlparse(self.path).path.rstrip("/")
+        self._audit_done = False
+        path = urlparse(self.path).path.rstrip("/") or "/"
+        self._pedido = {"metodo": "POST", "path": path, "acao": "", "registro": "", "consulta": ""}
         from financeiro import read_request_form
         form, files, rejected = read_request_form(self.headers, self.rfile, MAX_FORM_BYTES, MAX_UPLOAD_BYTES)
+        if not rejected:
+            self._pedido["acao"] = (form.get("acao") or "")[:40]
+            registro = str(form.get("id") or "")
+            self._pedido["registro"] = registro[:40] if registro.isdigit() else ""
         if rejected:
             self.send_html(413, page("Pedido grande", "<h1>Pedido grande demais</h1>"))
             return
@@ -2285,6 +2381,13 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_html(403, page("Usuários", "<h1>Usuários</h1><p>Somente um administrador pode cadastrar usuários.</p>", logged=True, current=USUARIOS_PATH))
                 return
             self.handle_usuarios_post(user, form)
+            return
+        if path == "/restrito/backups":
+            if not user:
+                self.redirect("/restrito/login")
+                return
+            from painel import handle_backups_post
+            handle_backups_post(self, user, form)
             return
         if path in ("/restrito/cadastros/pessoas", "/restrito/contas-a-pagar", "/restrito/contas-a-receber", "/restrito/titulos"):
             if not user:
@@ -3372,6 +3475,14 @@ class Handler(BaseHTTPRequestHandler):
                 (session_id(token), row[0], expires),
             )
             throttle_clear(conn, [bucket for bucket, _limit in buckets[:2]])
+            nome = conn.execute(
+                "SELECT display_name FROM app_user WHERE id = %s", (row[0],)
+            ).fetchone()
+            self._audit_usuario = {
+                "id": row[0],
+                "name": (nome[0] if nome and nome[0] else username),
+                "username": username,
+            }
             conn.commit()
         self.redirect(
             PASSWORD_PATH if must_change else "/restrito/cadastros",
@@ -3379,6 +3490,7 @@ class Handler(BaseHTTPRequestHandler):
         )
 
     def handle_logout(self) -> None:
+        self._audit_usuario = current_user(self)
         token = ""
         for part in self.headers.get("Cookie", "").split(";"):
             name, _, value = part.strip().partition("=")
@@ -3448,6 +3560,8 @@ class BoundedHTTPServer(ThreadingHTTPServer):
 
 def main() -> None:
     ensure_schema()
+    from painel import agendar_backup_diario
+    agendar_backup_diario()
     bind = os.environ.get("BIND", "127.0.0.1")
     port = int(os.environ.get("PORT", "8090"))
     server = BoundedHTTPServer((bind, port), Handler)

@@ -254,3 +254,18 @@ CREATE TABLE IF NOT EXISTS documento_sequencia (
     prefixo text PRIMARY KEY,
     ultimo bigint NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS auditoria (
+    id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    user_id bigint,
+    usuario text NOT NULL DEFAULT '',
+    acao text NOT NULL,
+    recurso text NOT NULL,
+    registro_id text NOT NULL DEFAULT '',
+    descricao text NOT NULL DEFAULT '',
+    ip text NOT NULL DEFAULT '',
+    CONSTRAINT auditoria_acao_chk CHECK (acao IN ('inclusao', 'alteracao', 'visualizacao', 'exclusao'))
+);
+
+CREATE INDEX IF NOT EXISTS auditoria_created_idx ON auditoria (created_at DESC);
